@@ -40,6 +40,7 @@ const (
 	modeSequential = "sequential"
 	modeRandom     = "random"
 	modeBalance    = "balance"
+	modeLatency    = "latency"
 
 	qualityProbeHost = "ip-api.com"
 )
@@ -184,6 +185,8 @@ func normalizeOptions(options Options) Options {
 		options.Mode = modeRandom
 	case modeBalance:
 		options.Mode = modeBalance
+	case modeLatency:
+		options.Mode = modeLatency
 	default:
 		options.Mode = modeSequential
 	}
@@ -468,23 +471,69 @@ func (p *poolOutbound) selectMember(candidates []*memberState) *memberState {
 		p.rngMu.Unlock()
 		return candidates[idx]
 	case modeBalance:
-		var selected *memberState
-		var minActive int32
-		for _, member := range candidates {
-			var active int32
-			if member.shared != nil {
-				active = member.shared.activeCount()
-			}
-			if selected == nil || active < minActive {
-				selected = member
-				minActive = active
-			}
-		}
-		return selected
+		return selectLeastActive(candidates)
+	case modeLatency:
+		return selectLowestLatency(candidates)
 	default:
 		idx := int(p.rrCounter.Add(1)-1) % len(candidates)
 		return candidates[idx]
 	}
+}
+
+func selectLeastActive(candidates []*memberState) *memberState {
+	var selected *memberState
+	var minActive int32
+	for _, member := range candidates {
+		active := memberActiveCount(member)
+		if selected == nil || active < minActive {
+			selected = member
+			minActive = active
+		}
+	}
+	return selected
+}
+
+func selectLowestLatency(candidates []*memberState) *memberState {
+	var selected *memberState
+	selectedLatency := int64(-1)
+	selectedActive := int32(0)
+	for _, member := range candidates {
+		latency := memberLatencyMs(member)
+		active := memberActiveCount(member)
+		if selected == nil || betterLatencyCandidate(latency, active, selectedLatency, selectedActive) {
+			selected = member
+			selectedLatency = latency
+			selectedActive = active
+		}
+	}
+	return selected
+}
+
+func betterLatencyCandidate(latency int64, active int32, selectedLatency int64, selectedActive int32) bool {
+	if latency >= 0 && selectedLatency < 0 {
+		return true
+	}
+	if latency < 0 && selectedLatency >= 0 {
+		return false
+	}
+	if latency >= 0 && selectedLatency >= 0 && latency != selectedLatency {
+		return latency < selectedLatency
+	}
+	return active < selectedActive
+}
+
+func memberActiveCount(member *memberState) int32 {
+	if member == nil || member.shared == nil {
+		return 0
+	}
+	return member.shared.activeCount()
+}
+
+func memberLatencyMs(member *memberState) int64 {
+	if member == nil || member.entry == nil {
+		return -1
+	}
+	return member.entry.LastLatencyMs()
 }
 
 func (p *poolOutbound) recordFailure(member *memberState, cause error) {

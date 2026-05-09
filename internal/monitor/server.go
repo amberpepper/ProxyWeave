@@ -838,8 +838,10 @@ func (s *Server) handleProbeAll(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	s.streamProbeSnapshots(w, r, s.mgr.Snapshot())
+}
 
-	// Set SSE headers
+func (s *Server) streamProbeSnapshots(w http.ResponseWriter, r *http.Request, snapshots []Snapshot) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -850,26 +852,19 @@ func (s *Server) handleProbeAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get all nodes
-	snapshots := s.mgr.Snapshot()
 	total := len(snapshots)
+	startData, _ := json.Marshal(map[string]any{"type": "start", "total": total})
+	fmt.Fprintf(w, "data: %s\n\n", startData)
+	flusher.Flush()
 	if total == 0 {
-		emptyData, _ := json.Marshal(map[string]any{"type": "complete", "total": 0, "success": 0, "failed": 0})
-		fmt.Fprintf(w, "data: %s\n\n", emptyData)
+		completeData, _ := json.Marshal(map[string]any{"type": "complete", "total": 0, "success": 0, "failed": 0})
+		fmt.Fprintf(w, "data: %s\n\n", completeData)
 		flusher.Flush()
 		return
 	}
 
-	// Send start event
-	startData, _ := json.Marshal(map[string]any{"type": "start", "total": total})
-	fmt.Fprintf(w, "data: %s\n\n", startData)
-	flusher.Flush()
-
-	// Create context with timeout
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
-
-	// Probe all nodes with semaphore control
 	type probeResult struct {
 		tag     string
 		name    string
@@ -879,57 +874,36 @@ func (s *Server) handleProbeAll(w http.ResponseWriter, r *http.Request) {
 	results := make(chan probeResult, total)
 	var wg sync.WaitGroup
 
-	// Launch probes with semaphore control
 	for _, snap := range snapshots {
 		wg.Add(1)
 		go func(snap Snapshot) {
 			defer wg.Done()
-
-			// Acquire semaphore permit
 			if err := s.probeSem.Acquire(ctx, 1); err != nil {
-				results <- probeResult{
-					tag:  snap.Tag,
-					name: snap.Name,
-					err:  "probe cancelled: " + err.Error(),
-				}
+				results <- probeResult{tag: snap.Tag, name: snap.Name, err: "probe cancelled: " + err.Error()}
 				return
 			}
 			defer s.probeSem.Release(1)
 
-			// Execute probe
 			probeCtx, probeCancel := context.WithTimeout(ctx, 10*time.Second)
 			defer probeCancel()
 
 			latency, err := s.mgr.Probe(probeCtx, snap.Tag)
 			if err != nil {
-				results <- probeResult{
-					tag:     snap.Tag,
-					name:    snap.Name,
-					latency: -1,
-					err:     err.Error(),
-				}
-			} else {
-				results <- probeResult{
-					tag:     snap.Tag,
-					name:    snap.Name,
-					latency: latency.Milliseconds(),
-					err:     "",
-				}
+				results <- probeResult{tag: snap.Tag, name: snap.Name, latency: -1, err: err.Error()}
+				return
 			}
+			latencyMs := latency.Milliseconds()
+			if latencyMs == 0 && latency > 0 {
+				latencyMs = 1
+			}
+			results <- probeResult{tag: snap.Tag, name: snap.Name, latency: latencyMs}
 		}(snap)
 	}
+	go func() { wg.Wait(); close(results) }()
 
-	// Wait for all probes to complete
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
-	// Collect results
 	successCount := 0
 	failedCount := 0
 	count := 0
-
 	for result := range results {
 		count++
 		if result.err != "" {
@@ -937,13 +911,11 @@ func (s *Server) handleProbeAll(w http.ResponseWriter, r *http.Request) {
 		} else {
 			successCount++
 		}
-
 		status := "success"
 		if result.err != "" {
 			status = "error"
 		}
-
-		eventPayload := map[string]any{
+		eventData, _ := json.Marshal(map[string]any{
 			"type":     "progress",
 			"tag":      result.tag,
 			"name":     result.name,
@@ -953,13 +925,11 @@ func (s *Server) handleProbeAll(w http.ResponseWriter, r *http.Request) {
 			"current":  count,
 			"total":    total,
 			"progress": float64(count) / float64(total) * 100,
-		}
-		eventData, _ := json.Marshal(eventPayload)
+		})
 		fmt.Fprintf(w, "data: %s\n\n", eventData)
 		flusher.Flush()
 	}
 
-	// Send complete event
 	completeData, _ := json.Marshal(map[string]any{"type": "complete", "total": total, "success": successCount, "failed": failedCount})
 	fmt.Fprintf(w, "data: %s\n\n", completeData)
 	flusher.Flush()
@@ -988,23 +958,7 @@ func (s *Server) validAPIKey(key string) bool {
 }
 
 func (s *Server) validAPIKeyFromRequest(r *http.Request) bool {
-	if s.validAPIKey(r.Header.Get("X-API-Key")) {
-		return true
-	}
-	if s.validAPIKey(r.URL.Query().Get("api_key")) {
-		return true
-	}
-	if s.validAPIKey(r.URL.Query().Get("apikey")) {
-		return true
-	}
-	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
-	if authHeader == "" {
-		return false
-	}
-	if strings.HasPrefix(authHeader, "Bearer ") {
-		return s.validAPIKey(strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer ")))
-	}
-	return s.validAPIKey(authHeader)
+	return s.validAPIKey(r.URL.Query().Get("apikey"))
 }
 
 // withAuth 认证中间件，如果配置了 api_key（兼容旧 password）则需要验证
@@ -1027,16 +981,6 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		if err == nil && s.validateSession(cookie.Value) {
 			next(w, r)
 			return
-		}
-
-		// 检查 Authorization header (Bearer token)
-		authHeader := r.Header.Get("Authorization")
-		if authHeader != "" {
-			token := strings.TrimPrefix(authHeader, "Bearer ")
-			if s.validateSession(token) {
-				next(w, r)
-				return
-			}
 		}
 
 		// 未授权
@@ -1926,6 +1870,10 @@ func (s *Server) handleSubscriptionItem(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, map[string]any{"message": "订阅刷新成功"})
 		return
 	}
+	if len(parts) == 2 && parts[1] == "probe" {
+		s.handleSubscriptionProbe(w, r, id)
+		return
+	}
 	if len(parts) == 2 && parts[1] == "nodes" {
 		s.handleSubscriptionNodes(w, r, id)
 		return
@@ -1959,6 +1907,37 @@ func (s *Server) handleSubscriptionItem(w http.ResponseWriter, r *http.Request) 
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) handleSubscriptionProbe(w http.ResponseWriter, r *http.Request, id int64) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	allNodes, err := s.listAllSubscriptionNodes(r.Context(), id)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+	uris := make(map[string]struct{}, len(allNodes))
+	for _, node := range allNodes {
+		uri := strings.TrimSpace(node.URI)
+		if uri != "" {
+			uris[uri] = struct{}{}
+		}
+	}
+	if len(uris) == 0 {
+		s.streamProbeSnapshots(w, r, nil)
+		return
+	}
+	snapshots := make([]Snapshot, 0, len(uris))
+	for _, snap := range s.mgr.Snapshot() {
+		if _, ok := uris[strings.TrimSpace(snap.URI)]; ok {
+			snapshots = append(snapshots, snap)
+		}
+	}
+	s.streamProbeSnapshots(w, r, snapshots)
 }
 
 func (s *Server) handleSubscriptionNodes(w http.ResponseWriter, r *http.Request, id int64) {

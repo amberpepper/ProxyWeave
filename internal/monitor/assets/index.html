@@ -383,6 +383,41 @@
     .panel-title { font-size: 14px; font-weight: 600; }
     .table-container { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; text-align: left; }
+    .monitor-nodes-table {
+      min-width: 1060px;
+      table-layout: fixed;
+    }
+    .monitor-nodes-table th,
+    .monitor-nodes-table td {
+      vertical-align: middle;
+    }
+    .monitor-nodes-table th:nth-child(1) { width: 120px; }
+    .monitor-nodes-table th:nth-child(2) { width: 80px; }
+    .monitor-nodes-table th:nth-child(3) { width: 300px; }
+    .monitor-nodes-table th:nth-child(4) { width: 72px; }
+    .monitor-nodes-table th:nth-child(5) { width: 130px; }
+    .monitor-nodes-table th:nth-child(6) { width: 220px; }
+    .monitor-nodes-table th:nth-child(7) { width: 70px; }
+    .monitor-nodes-table th:nth-child(8) { width: 68px; }
+    .node-name-cell {
+      min-width: 0;
+    }
+    .node-name-main,
+    .node-tag-text {
+      display: block;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .node-name-main {
+      font-weight: 500;
+    }
+    .node-tag-text {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
     .config-nodes-table {
       width: 100%;
       min-width: 1240px;
@@ -1208,7 +1243,7 @@
             </div>
           </div>
           <div class="table-container">
-            <table>
+            <table class="monitor-nodes-table">
               <thead>
                 <tr>
                   <th>状态</th>
@@ -1414,7 +1449,7 @@
             <div class="api-docs-grid">
               <div class="api-doc-item">
                 <h4>鉴权</h4>
-                <p>默认使用查询参数 <code>?apikey=xxx</code>。同时兼容 <code>?api_key=xxx</code>、<code>X-API-Key</code> 和 <code>Authorization: Bearer</code>。</p>
+                <p>使用查询参数 <code>?apikey=xxx</code> 进行鉴权。</p>
                 <pre class="api-doc-code" id="apiDocAuthExample"></pre>
               </div>
               <div class="api-doc-item">
@@ -1429,7 +1464,7 @@
               </div>
               <div class="api-doc-item">
                 <h4>取统一代理池入口</h4>
-                <p>返回统一池入口，调度方式由 <code>pool.mode</code> 决定，例如 random / balance。</p>
+                <p>返回统一池入口，实际出站由 <code>pool.mode</code> 分配策略决定，例如 random / balance / latency。</p>
                 <pre class="api-doc-code" id="apiDocPoolExample"></pre>
               </div>
               <div class="api-doc-item">
@@ -1498,11 +1533,12 @@
               <div class="panel-header"><div class="panel-title">节点池配置 (Pool)</div></div>
               <div style="padding: 16px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
                 <div class="form-group">
-                  <label>调度模式</label>
+                  <label>分配策略</label>
                   <select id="settingPoolMode" class="setting-input">
                     <option value="random">random - 随机</option>
-                    <option value="round-robin">round-robin - 轮询</option>
-                    <option value="balance">balance - 均衡</option>
+                    <option value="sequential">sequential - 轮询</option>
+                    <option value="balance">balance - 最少连接</option>
+                    <option value="latency">latency - 最低延迟优先</option>
                   </select>
                 </div>
                 <div class="form-group"><label>故障阈值</label><input type="number" id="settingPoolFailure" class="setting-input" min="1" max="100" placeholder="3" /></div>
@@ -1515,7 +1551,7 @@
               <div style="padding: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                 <div class="form-group"><label>监听地址</label><input type="text" id="settingMgmtListen" class="setting-input" placeholder="0.0.0.0:8080" /></div>
                 <div class="form-group"><label>健康检查间隔</label><input type="text" id="settingHealthCheckInterval" class="setting-input" placeholder="5m" /></div>
-                <div class="form-group"><label>API Key</label><input type="password" id="settingMgmtAPIKey" class="setting-input" placeholder="X-API-Key / Bearer token / ?api_key=xxx / ?apikey=xxx" /></div>
+                <div class="form-group"><label>API Key</label><input type="password" id="settingMgmtAPIKey" class="setting-input" placeholder="?apikey=xxx" /></div>
                 <div class="form-group">
                   <label>节点质量 API</label>
                   <select id="settingQualityProvider" class="setting-input">
@@ -2319,9 +2355,9 @@
         return `<tr>
           <td><span class="badge ${badge}">${statusText}</span></td>
           <td><span class="region-cell">${regionSvg(n.region || 'other')} ${(n.region||'other').toUpperCase()}</span></td>
-          <td>
-            <div style="font-weight: 500">${escapeHtml(n.name || n.tag)}</div>
-            <div style="font-size: 11px; color: var(--text-muted)">${escapeHtml(n.tag)}</div>
+          <td class="node-name-cell">
+            <span class="node-name-main" title="${escapeAttr(n.name || n.tag)}">${escapeHtml(n.name || n.tag)}</span>
+            <span class="node-tag-text" title="${escapeAttr(n.tag)}">${escapeHtml(n.tag)}</span>
           </td>
           <td class="tt-mono">${n.port || '-'}</td>
           <td>
@@ -2429,13 +2465,18 @@
 
     // Probe All
     let isProbing = false;
-    async function probeAllNodes() {
-      if(isProbing) return; isProbing = true;
+    async function streamProbeRequest(url, doneLabel = '探测完成') {
+      if(isProbing) return;
+      isProbing = true;
       document.getElementById('probeProgress').classList.add('show');
       document.getElementById('probeProgressFill').style.width = '0%';
+      document.getElementById('probeStats').textContent = '0/0';
+      document.getElementById('probeSuccess').textContent = '0';
+      document.getElementById('probeFail').textContent = '0';
       let total = 0, current = 0, suc = 0, fail = 0;
       try {
-        const res = await fetch('/api/nodes/probe-all', { method: 'POST' });
+        const res = await fetch(url, { method: 'POST' });
+        if (!res.ok || !res.body) throw new Error('请求失败');
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = '';
@@ -2449,7 +2490,7 @@
             if(line.startsWith('data: ')) {
                try {
                  const d = JSON.parse(line.slice(6));
-                 if(d.type === 'start') { total = d.total; }
+                 if(d.type === 'start') { total = d.total; document.getElementById('probeStats').textContent = `0/${total}`; }
                  else if(d.type === 'progress') {
                    current = d.current;
                    if(d.error) fail++; else suc++;
@@ -2458,17 +2499,26 @@
                    document.getElementById('probeSuccess').textContent = suc;
                    document.getElementById('probeFail').textContent = fail;
                  } else if (d.type === 'complete') {
-                   showToast(`探测完成: 成功${d.success}, 失败${d.failed}`);
+                   showToast(`${doneLabel}: 成功${d.success}, 失败${d.failed}`);
                  }
                } catch(e){}
             }
           }
         }
-      } catch(e){}
+      } catch(e){ showToast(`${doneLabel}失败: ${e.message}`, 'error'); }
       finally {
         isProbing = false;
         setTimeout(()=>{ document.getElementById('probeProgress').classList.remove('show'); refresh(); }, 2000);
       }
+    }
+
+    async function probeAllNodes() {
+      return streamProbeRequest('/api/nodes/probe-all', '探测完成');
+    }
+
+    async function probeSubscriptionById(id) {
+      closeConfigActionMenus();
+      return streamProbeRequest(`/api/subscriptions/${id}/probe`, '订阅探测完成');
     }
 
     async function qualityAllNodes() {
@@ -2612,6 +2662,7 @@
             <div class="action-menu">
               <button class="btn js-edit-sub" data-sub="${escapeAttr(JSON.stringify(sub))}">${buttonIcon('edit')}编辑</button>
               <button class="btn" onclick="closeConfigActionMenus(); refreshSubscriptionById(${sub.id})">${buttonIcon('refresh')}刷新</button>
+              <button class="btn" onclick="probeSubscriptionById(${sub.id})">${buttonIcon('zap')}探测</button>
               <button class="btn btn-danger" onclick="closeConfigActionMenus(); deleteSubscriptionById(${sub.id})">${buttonIcon('trash')}删除</button>
             </div>
           </div>
@@ -2893,7 +2944,7 @@
         configNodesPageSize = data.page_size || configNodesPageSize;
         configNodesTotalPages = data.total_pages || 1;
         const tbody = document.getElementById('configNodesTableBody');
-        tbody.innerHTML = configNodes.map((n, i) => `
+        tbody.innerHTML = configNodes.length ? configNodes.map((n, i) => `
           <tr>
             <td><strong>${escapeHtml(n.name)}</strong></td>
             <td class="tt-mono">${n.port || '-'}</td>
@@ -2917,7 +2968,7 @@
               </div>
             </td>
           </tr>
-        `).join('');
+        `).join('') : '<tr><td colspan="9" style="text-align:center; color:var(--text-muted); padding:24px;">暂无节点</td></tr>';
         document.getElementById('configNodesPageInfo').textContent = `共 ${configNodesTotal} 条`;
         document.getElementById('configNodesPageText').textContent = `第 ${configNodesPage} / ${Math.max(configNodesTotalPages, 1)} 页`;
         document.getElementById('configNodesPrevBtn').disabled = configNodesPage <= 1;

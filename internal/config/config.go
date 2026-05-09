@@ -92,7 +92,7 @@ type ManagementConfig struct {
 	ProbeTarget         string        `yaml:"probe_target"`
 	HealthCheckInterval time.Duration `yaml:"health_check_interval"`
 	Password            string        `yaml:"password"` // WebUI 访问密码，为空则不需要密码
-	APIKey              string        `yaml:"api_key"`  // WebUI/API key，可通过 X-API-Key 或 Authorization: Bearer 使用
+	APIKey              string        `yaml:"api_key"`  // WebUI/API key，可通过 apikey 查询参数使用
 	QualityEnabled      *bool         `yaml:"quality_enabled"`
 	QualityProvider     string        `yaml:"quality_provider"`  // ipinfo_dkly / auto / ip-api / ipinfo_lite / off
 	QualityAPIKey       string        `yaml:"quality_api_key"`   // 质量 API Key（dkly / IPinfo Lite）

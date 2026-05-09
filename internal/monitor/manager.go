@@ -23,7 +23,7 @@ type Config struct {
 	ProbeTarget         string
 	HealthCheckInterval time.Duration
 	Password            string
-	APIKey              string // WebUI/API key（用于 Header/Bearer 鉴权）
+	APIKey              string // WebUI/API key（用于 apikey 查询参数鉴权）
 	ProxyUsername       string // 代理池的用户名（用于导出）
 	ProxyPassword       string // 代理池的密码（用于导出）
 	ExternalIP          string // 外部 IP 地址，用于导出时替换 0.0.0.0
@@ -927,6 +927,22 @@ func (h *EntryHandle) FinishQualityProbe(info QualityInfo, err error) {
 	if h.mgr != nil {
 		h.mgr.persistEntry(h.ref)
 	}
+}
+
+func (h *EntryHandle) LastLatencyMs() int64 {
+	if h == nil || h.ref == nil {
+		return -1
+	}
+	h.ref.mu.RLock()
+	defer h.ref.mu.RUnlock()
+	if h.ref.lastProbe <= 0 {
+		return -1
+	}
+	latencyMs := h.ref.lastProbe.Milliseconds()
+	if latencyMs == 0 {
+		return 1
+	}
+	return latencyMs
 }
 
 // RecordFailure updates failure counters.
