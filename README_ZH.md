@@ -45,6 +45,40 @@ touch nodes.txt
 docker compose up -d
 ```
 
+### 直接使用镜像运行
+
+```bash
+cp config.example.yaml config.yaml
+touch nodes.txt
+mkdir -p logs
+
+docker pull ghcr.io/amberpepper/proxyweave:latest
+
+docker run -d \
+  --name proxyweave \
+  --network host \
+  --restart unless-stopped \
+  -v $(pwd)/config.yaml:/etc/proxyweave/config.yaml \
+  -v $(pwd)/nodes.txt:/etc/proxyweave/nodes.txt \
+  -v $(pwd)/logs:/app/logs \
+  ghcr.io/amberpepper/proxyweave:latest
+```
+
+如果不使用 host 网络，也可以手动映射端口，例如：
+
+```bash
+docker run -d \
+  --name proxyweave \
+  --restart unless-stopped \
+  -p 2323:2323 \
+  -p 9091:9091 \
+  -p 24000-24100:24000-24100 \
+  -v $(pwd)/config.yaml:/etc/proxyweave/config.yaml \
+  -v $(pwd)/nodes.txt:/etc/proxyweave/nodes.txt \
+  -v $(pwd)/logs:/app/logs \
+  ghcr.io/amberpepper/proxyweave:latest
+```
+
 ### 本地运行
 
 ```bash

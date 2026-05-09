@@ -45,6 +45,40 @@ Edit `config.yaml` and add your nodes (`nodes.txt` / `subscriptions` / `nodes`).
 docker compose up -d
 ```
 
+### Docker Hub / GHCR image
+
+```bash
+cp config.example.yaml config.yaml
+touch nodes.txt
+mkdir -p logs
+
+docker pull ghcr.io/amberpepper/proxyweave:latest
+
+docker run -d \
+  --name proxyweave \
+  --network host \
+  --restart unless-stopped \
+  -v $(pwd)/config.yaml:/etc/proxyweave/config.yaml \
+  -v $(pwd)/nodes.txt:/etc/proxyweave/nodes.txt \
+  -v $(pwd)/logs:/app/logs \
+  ghcr.io/amberpepper/proxyweave:latest
+```
+
+If you do not want host networking, map ports explicitly, for example:
+
+```bash
+docker run -d \
+  --name proxyweave \
+  --restart unless-stopped \
+  -p 2323:2323 \
+  -p 9091:9091 \
+  -p 24000-24100:24000-24100 \
+  -v $(pwd)/config.yaml:/etc/proxyweave/config.yaml \
+  -v $(pwd)/nodes.txt:/etc/proxyweave/nodes.txt \
+  -v $(pwd)/logs:/app/logs \
+  ghcr.io/amberpepper/proxyweave:latest
+```
+
 ### Run from source
 
 ```bash

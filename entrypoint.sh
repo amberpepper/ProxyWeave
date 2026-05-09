@@ -61,7 +61,7 @@ chown -R easy:easy /app 2>/dev/null || true
 
 if [ "$OVERRIDE_CONFIG" = "true" ]; then
   chown easy:easy "$CONFIG_PATH" 2>/dev/null || true
-  exec gosu easy /usr/local/bin/proxyweave --config "$CONFIG_PATH"
+  exec su-exec easy /usr/local/bin/proxyweave --config "$CONFIG_PATH"
 else
-  exec gosu easy /usr/local/bin/proxyweave "$@"
+  exec su-exec easy /usr/local/bin/proxyweave "$@"
 fi
