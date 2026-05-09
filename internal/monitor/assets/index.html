@@ -1251,9 +1251,8 @@
               <input type="text" id="configNodeRegionFilter" class="setting-input" placeholder="地域，如 US / JP / TW" style="width:180px;" />
               <select id="configNodeSourceFilter" class="setting-input" style="width:160px;">
                 <option value="all">全部来源</option>
-                <option value="inline">inline</option>
-                <option value="nodes_file">nodes_file</option>
-                <option value="subscription">subscription</option>
+                <option value="inline">手动</option>
+                <option value="subscription">订阅</option>
               </select>
               <select id="configNodeStatusFilter" class="setting-input" style="width:150px;">
                 <option value="all">全部状态</option>
@@ -2520,7 +2519,7 @@
         if(!res.ok) throw new Error();
         const blob = await res.blob();
         const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a'); a.href = url; a.download = 'nodes.txt';
+        const a = document.createElement('a'); a.href = url; a.download = 'proxyweave-nodes.txt';
         document.body.appendChild(a); a.click(); document.body.removeChild(a); window.URL.revokeObjectURL(url);
       } catch(e) { showToast('导出失败', 'error');}
     }

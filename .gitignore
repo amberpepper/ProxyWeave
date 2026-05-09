@@ -50,3 +50,4 @@ coverage.html
 
 # AI tool artifacts
 .ace-tool/
+.claude

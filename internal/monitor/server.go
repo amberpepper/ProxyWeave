@@ -81,7 +81,7 @@ type SubscriptionStatus struct {
 	LastError     string    `json:"last_error,omitempty"`
 	RefreshCount  int       `json:"refresh_count"`
 	IsRefreshing  bool      `json:"is_refreshing"`
-	NodesModified bool      `json:"nodes_modified"` // True if nodes.txt was modified since last refresh
+	NodesModified bool      `json:"nodes_modified"`
 }
 
 // Server exposes HTTP endpoints for monitoring.

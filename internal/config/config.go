@@ -143,7 +143,7 @@ func DefaultWebConfig() Config {
 	return Config{
 		Mode:      "hybrid",
 		LogLevel:  "info",
-		NodesFile: "nodes.txt",
+		NodesFile: "",
 		Listener: ListenerConfig{
 			Address: "0.0.0.0",
 			Port:    2323,
@@ -391,7 +391,7 @@ func (c *Config) normalize() error {
 		c.Nodes = append(c.Nodes, fileNodes...)
 	}
 
-	// Load nodes from subscriptions (highest priority - writes to nodes.txt)
+	// Load nodes from subscriptions for legacy YAML configs.
 	if len(c.Subscriptions) > 0 {
 		var subNodes []NodeConfig
 		subTimeout := c.SubscriptionRefresh.Timeout
@@ -404,18 +404,18 @@ func (c *Config) normalize() error {
 			log.Printf("✅ Loaded %d nodes from subscription", len(nodes))
 			subNodes = append(subNodes, nodes...)
 		}
-		// Mark subscription nodes and write to nodes.txt
+		// Mark subscription nodes and cache them in the configured legacy nodes file.
 		for idx := range subNodes {
 			subNodes[idx].Source = NodeSourceSubscription
 		}
 		if len(subNodes) > 0 {
-			// Determine nodes.txt path
+			// Determine legacy nodes file path
 			nodesFilePath := c.NodesFile
 			if nodesFilePath == "" {
 				nodesFilePath = filepath.Join(filepath.Dir(c.filePath), "nodes.txt")
 				c.NodesFile = nodesFilePath
 			}
-			// Write subscription nodes to nodes.txt
+			// Write subscription nodes to the legacy nodes file
 			if err := writeNodesToFile(nodesFilePath, subNodes); err != nil {
 				log.Printf("⚠️ Failed to write nodes to %q: %v", nodesFilePath, err)
 			} else {
@@ -423,7 +423,7 @@ func (c *Config) normalize() error {
 			}
 		}
 		c.Nodes = append(c.Nodes, subNodes...)
-		// Fallback: if all subscriptions failed, try loading cached nodes.txt
+		// Fallback: if all subscriptions failed, try loading the cached legacy nodes file
 		if len(subNodes) == 0 && c.NodesFile != "" {
 			cachedNodes, err := loadNodesFromFile(c.NodesFile)
 			if err == nil && len(cachedNodes) > 0 {
@@ -1303,10 +1303,10 @@ func writeNodesToFile(path string, nodes []NodeConfig) error {
 	return writeFileWithLock(path, []byte(content), 0o644)
 }
 
-// SaveNodes persists nodes to their appropriate locations based on source.
-// - subscription/nodes_file nodes → nodes.txt (or configured nodes_file)
-// - inline nodes → config.yaml nodes array
-// Config.yaml structure (subscriptions, nodes_file) is preserved.
+// SaveNodes persists nodes for legacy YAML configs based on source.
+// - subscription/nodes_file nodes → configured nodes_file
+// - inline nodes → config nodes array
+// Config structure is preserved.
 func (c *Config) SaveNodes() error {
 	if c == nil {
 		return errors.New("config is nil")
@@ -1339,7 +1339,7 @@ func (c *Config) SaveNodes() error {
 		}
 	}
 
-	// Write file-based nodes to nodes.txt
+	// Write file-based nodes to the configured legacy nodes file
 	if len(fileNodes) > 0 || c.NodesFile != "" {
 		nodesFilePath := c.NodesFile
 		if nodesFilePath == "" {
@@ -1350,7 +1350,7 @@ func (c *Config) SaveNodes() error {
 		}
 	}
 
-	// Update config.yaml nodes array (including clearing it when all inline nodes are deleted)
+	// Update inline nodes array, including clearing it when all inline nodes are deleted
 	{
 		// Read original config to preserve structure
 		data, err := os.ReadFile(c.filePath)
@@ -1384,7 +1384,7 @@ func (c *Config) Save() error {
 }
 
 // SaveSettings persists only config settings (external_ip, probe_target, skip_cert_verify)
-// without touching nodes.txt. Use this for settings API updates.
+// without touching node definitions. Use this for settings API updates.
 func (c *Config) SaveSettings() error {
 	if c == nil {
 		return errors.New("config is nil")

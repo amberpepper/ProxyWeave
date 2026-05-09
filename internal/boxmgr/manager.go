@@ -799,8 +799,7 @@ func (m *Manager) CreateNode(ctx context.Context, node config.NodeConfig) (confi
 	}
 
 	// Determine source. Web-created manual nodes should stay manually managed.
-	// When subscriptions exist, store them inline so a future subscription refresh
-	// does not overwrite them in nodes.txt.
+	// When subscriptions exist, keep manual nodes separate from refreshed subscription nodes.
 	if len(m.cfg.Subscriptions) > 0 {
 		normalized.Source = config.NodeSourceInline
 	} else if m.cfg.NodesFile != "" {
