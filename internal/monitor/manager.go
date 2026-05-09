@@ -69,6 +69,44 @@ type QualityInfo struct {
 	Error           string    `json:"quality_error,omitempty"`
 }
 
+// PersistedState is the DB-backed subset of runtime state that survives restarts.
+type PersistedState struct {
+	Available        bool
+	InitialCheckDone bool
+	FailureCount     int
+	Blacklisted      bool
+	BlacklistedUntil time.Time
+	LastError        string
+	LastLatencyMs    int64
+	LastSuccess      time.Time
+	LastFailure      time.Time
+	CountryCode      string
+	Country          string
+	ExitIP           string
+	ProxyType        string
+	QualitySource    string
+	QualityError     string
+	QualityCheckedAt time.Time
+	IPValid          bool
+	IPVersion        string
+	IPType           string
+	IPInvalidReason  string
+	ASN              string
+	ASName           string
+	ISP              string
+	Org              string
+	Mobile           bool
+	Hosting          bool
+	Proxy            bool
+}
+
+// StateStore persists runtime node state.
+type StateStore interface {
+	LoadRuntimeStates(ctx context.Context) (map[string]PersistedState, error)
+	SaveRuntimeState(ctx context.Context, nodeURI string, st PersistedState) error
+	DeleteRuntimeState(ctx context.Context, nodeURI string) error
+}
+
 // TimelineEvent represents a single usage event for debug tracking.
 type TimelineEvent struct {
 	Time      time.Time `json:"time"`
@@ -104,6 +142,7 @@ type releaseFunc func()
 
 type EntryHandle struct {
 	ref *entry
+	mgr *Manager
 }
 
 type entry struct {
@@ -140,6 +179,8 @@ type Manager struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	logger     Logger
+	stateStore StateStore
+	persisted  map[string]PersistedState
 }
 
 // Logger interface for logging
@@ -152,10 +193,11 @@ type Logger interface {
 func NewManager(cfg Config) (*Manager, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
-		cfg:    cfg,
-		nodes:  make(map[string]*entry),
-		ctx:    ctx,
-		cancel: cancel,
+		cfg:       cfg,
+		nodes:     make(map[string]*entry),
+		ctx:       ctx,
+		cancel:    cancel,
+		persisted: make(map[string]PersistedState),
 	}
 	if cfg.ProbeTarget != "" {
 		target := cfg.ProbeTarget
@@ -230,6 +272,43 @@ func (m *Manager) SetQualityConfig(enabled bool, provider, apiKey string, cacheT
 // SetLogger sets the logger for the manager.
 func (m *Manager) SetLogger(logger Logger) {
 	m.logger = logger
+}
+
+// SetStateStore binds persistent runtime-state storage and restores known state.
+func (m *Manager) SetStateStore(store StateStore) error {
+	if m == nil {
+		return nil
+	}
+
+	m.mu.Lock()
+	m.stateStore = store
+	m.persisted = make(map[string]PersistedState)
+	m.mu.Unlock()
+
+	if store == nil {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	states, err := store.LoadRuntimeStates(ctx)
+	if err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.persisted = states
+	for _, e := range m.nodes {
+		if uri := strings.TrimSpace(e.info.URI); uri != "" {
+			if st, ok := m.persisted[uri]; ok {
+				e.restorePersistedState(st)
+				delete(m.persisted, uri)
+			}
+		}
+	}
+	return nil
 }
 
 // StartPeriodicHealthCheck starts a background goroutine that periodically checks all nodes.
@@ -334,6 +413,7 @@ func (m *Manager) probeAllNodes(timeout time.Duration) {
 				entry.initialCheckDone = true
 			}
 			entry.mu.Unlock()
+			m.persistEntry(entry)
 
 			if err != nil && m.logger != nil {
 				m.logger.Warn("probe failed for ", tag, ": ", err)
@@ -375,13 +455,17 @@ func (m *Manager) Register(info NodeInfo) *EntryHandle {
 		m.nodes[info.Tag] = e
 	} else {
 		if e.info.URI != "" && info.URI != "" && e.info.URI != info.URI {
-			e.quality = QualityInfo{}
-			e.qualityAttempt = time.Time{}
-			e.qualityChecking = false
+			e.resetRuntimeLocked()
 		}
 		e.info = info
 	}
-	return &EntryHandle{ref: e}
+	if uri := strings.TrimSpace(info.URI); uri != "" {
+		if st, found := m.persisted[uri]; found {
+			e.restorePersistedState(st)
+			delete(m.persisted, uri)
+		}
+	}
+	return &EntryHandle{ref: e, mgr: m}
 }
 
 // ClearNodes removes all registered nodes. Call before re-registering
@@ -463,6 +547,7 @@ func (m *Manager) Probe(ctx context.Context, tag string) (time.Duration, error) 
 		return 0, err
 	}
 	e.recordProbeLatency(latency)
+	m.persistEntry(e)
 	return latency, nil
 }
 
@@ -508,6 +593,7 @@ func (m *Manager) Release(tag string) error {
 		return errors.New("release not available for this node")
 	}
 	e.release()
+	m.persistEntry(e)
 	return nil
 }
 
@@ -527,6 +613,7 @@ func (m *Manager) ManualBlacklist(tag string, duration time.Duration) error {
 	}
 	// Also mark in monitor state (affects UI display)
 	e.blacklistUntil(time.Now().Add(duration))
+	m.persistEntry(e)
 	return nil
 }
 
@@ -574,6 +661,125 @@ func (e *entry) snapshot() Snapshot {
 		InitialCheckDone:  e.initialCheckDone,
 		Timeline:          timelineCopy,
 		QualityInfo:       e.quality,
+	}
+}
+
+func (e *entry) resetRuntimeLocked() {
+	e.failure = 0
+	e.success = 0
+	e.timeline = make([]TimelineEvent, 0, maxTimelineSize)
+	e.blacklist = false
+	e.until = time.Time{}
+	e.lastError = ""
+	e.lastFail = time.Time{}
+	e.lastOK = time.Time{}
+	e.lastProbe = 0
+	e.initialCheckDone = false
+	e.available = false
+	e.quality = QualityInfo{}
+	e.qualityChecking = false
+	e.qualityAttempt = time.Time{}
+}
+
+func (e *entry) restorePersistedState(st PersistedState) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.failure = st.FailureCount
+	e.blacklist = st.Blacklisted
+	e.until = st.BlacklistedUntil
+	e.lastError = st.LastError
+	e.lastFail = st.LastFailure
+	e.lastOK = st.LastSuccess
+	e.initialCheckDone = st.InitialCheckDone
+	e.available = st.Available
+	if st.LastLatencyMs > 0 {
+		e.lastProbe = time.Duration(st.LastLatencyMs) * time.Millisecond
+	} else {
+		e.lastProbe = 0
+	}
+	e.quality = QualityInfo{
+		ExitIP:          st.ExitIP,
+		IPValid:         st.IPValid,
+		IPVersion:       st.IPVersion,
+		IPType:          st.IPType,
+		IPInvalidReason: st.IPInvalidReason,
+		CountryCode:     st.CountryCode,
+		Country:         st.Country,
+		ASN:             st.ASN,
+		ASName:          st.ASName,
+		ISP:             st.ISP,
+		Org:             st.Org,
+		ProxyType:       st.ProxyType,
+		QualitySource:   st.QualitySource,
+		Mobile:          st.Mobile,
+		Hosting:         st.Hosting,
+		Proxy:           st.Proxy,
+		CheckedAt:       st.QualityCheckedAt,
+		Error:           st.QualityError,
+	}
+}
+
+func (e *entry) persistedState() PersistedState {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	latencyMs := int64(-1)
+	if e.lastProbe > 0 {
+		latencyMs = e.lastProbe.Milliseconds()
+		if latencyMs == 0 {
+			latencyMs = 1
+		}
+	}
+
+	return PersistedState{
+		Available:        e.available,
+		InitialCheckDone: e.initialCheckDone,
+		FailureCount:     e.failure,
+		Blacklisted:      e.blacklist,
+		BlacklistedUntil: e.until,
+		LastError:        e.lastError,
+		LastLatencyMs:    latencyMs,
+		LastSuccess:      e.lastOK,
+		LastFailure:      e.lastFail,
+		CountryCode:      e.quality.CountryCode,
+		Country:          e.quality.Country,
+		ExitIP:           e.quality.ExitIP,
+		ProxyType:        e.quality.ProxyType,
+		QualitySource:    e.quality.QualitySource,
+		QualityError:     e.quality.Error,
+		QualityCheckedAt: e.quality.CheckedAt,
+		IPValid:          e.quality.IPValid,
+		IPVersion:        e.quality.IPVersion,
+		IPType:           e.quality.IPType,
+		IPInvalidReason:  e.quality.IPInvalidReason,
+		ASN:              e.quality.ASN,
+		ASName:           e.quality.ASName,
+		ISP:              e.quality.ISP,
+		Org:              e.quality.Org,
+		Mobile:           e.quality.Mobile,
+		Hosting:          e.quality.Hosting,
+		Proxy:            e.quality.Proxy,
+	}
+}
+
+func (m *Manager) persistEntry(e *entry) {
+	if m == nil || e == nil {
+		return
+	}
+	m.mu.RLock()
+	store := m.stateStore
+	m.mu.RUnlock()
+	if store == nil {
+		return
+	}
+	uri := strings.TrimSpace(e.info.URI)
+	if uri == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := store.SaveRuntimeState(ctx, uri, e.persistedState()); err != nil && m.logger != nil {
+		m.logger.Warn("persist runtime state failed for ", uri, ": ", err)
 	}
 }
 
@@ -706,6 +912,9 @@ func (h *EntryHandle) FinishQualityProbe(info QualityInfo, err error) {
 	h.ref.qualityChecking = false
 	if err != nil {
 		h.ref.quality.Error = err.Error()
+		if h.mgr != nil {
+			h.mgr.persistEntry(h.ref)
+		}
 		return
 	}
 	if info.CheckedAt.IsZero() {
@@ -715,6 +924,9 @@ func (h *EntryHandle) FinishQualityProbe(info QualityInfo, err error) {
 		info.ProxyType = "unknown"
 	}
 	h.ref.quality = info
+	if h.mgr != nil {
+		h.mgr.persistEntry(h.ref)
+	}
 }
 
 // RecordFailure updates failure counters.
@@ -723,6 +935,9 @@ func (h *EntryHandle) RecordFailure(err error) {
 		return
 	}
 	h.ref.recordFailure(err)
+	if h.mgr != nil {
+		h.mgr.persistEntry(h.ref)
+	}
 }
 
 // RecordSuccess updates the last success timestamp.
@@ -731,6 +946,9 @@ func (h *EntryHandle) RecordSuccess() {
 		return
 	}
 	h.ref.recordSuccess()
+	if h.mgr != nil {
+		h.mgr.persistEntry(h.ref)
+	}
 }
 
 // RecordSuccessWithLatency updates the last success timestamp and latency.
@@ -739,6 +957,9 @@ func (h *EntryHandle) RecordSuccessWithLatency(latency time.Duration) {
 		return
 	}
 	h.ref.recordSuccessWithLatency(latency)
+	if h.mgr != nil {
+		h.mgr.persistEntry(h.ref)
+	}
 }
 
 // Blacklist marks the node unavailable until the given deadline.
@@ -747,6 +968,9 @@ func (h *EntryHandle) Blacklist(until time.Time) {
 		return
 	}
 	h.ref.blacklistUntil(until)
+	if h.mgr != nil {
+		h.mgr.persistEntry(h.ref)
+	}
 }
 
 // ClearBlacklist removes the blacklist flag.
@@ -755,6 +979,9 @@ func (h *EntryHandle) ClearBlacklist() {
 		return
 	}
 	h.ref.clearBlacklist()
+	if h.mgr != nil {
+		h.mgr.persistEntry(h.ref)
+	}
 }
 
 // IncActive increments the active connection counter.
@@ -816,6 +1043,9 @@ func (h *EntryHandle) MarkInitialCheckDone(available bool) {
 	h.ref.initialCheckDone = true
 	h.ref.available = available
 	h.ref.mu.Unlock()
+	if h.mgr != nil {
+		h.mgr.persistEntry(h.ref)
+	}
 }
 
 // MarkAvailable updates the availability status.
@@ -826,4 +1056,7 @@ func (h *EntryHandle) MarkAvailable(available bool) {
 	h.ref.mu.Lock()
 	h.ref.available = available
 	h.ref.mu.Unlock()
+	if h.mgr != nil {
+		h.mgr.persistEntry(h.ref)
+	}
 }

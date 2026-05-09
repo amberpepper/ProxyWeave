@@ -15,25 +15,20 @@ Current project: [amberpepper/ProxyWeave](https://github.com/amberpepper/ProxyWe
 
 ## Highlights
 
-This customized version includes:
-
 - Web dashboard (`/`) and management APIs (`/api/*`)
 - Real-time traffic chart via SSE (`/api/traffic`) and log console (`/api/logs`)
 - Node CRUD, single/batch probing, manual blacklist/release
-- Subscription management with scheduled refresh and hot reload
+- SQLite-backed settings, nodes, subscriptions, and runtime state persistence
+- Per-subscription refresh scheduling with node association and node counts
 - GeoIP region routing (e.g. `/jp`, `/us`) with GeoLite2 auto-update
-- Runtime settings persistence (`config.yaml`) and log rotation controls
 
 ## Install
 
 ```bash
 git clone https://github.com/amberpepper/ProxyWeave.git
 cd ProxyWeave
-cp config.example.yaml config.yaml
-touch nodes.txt
+mkdir -p data logs
 ```
-
-Edit `config.yaml` and add your nodes (`nodes.txt` / `subscriptions` / `nodes`).
 
 ## Start
 
@@ -45,12 +40,10 @@ Edit `config.yaml` and add your nodes (`nodes.txt` / `subscriptions` / `nodes`).
 docker compose up -d
 ```
 
-### Docker Hub / GHCR image
+### GHCR image
 
 ```bash
-cp config.example.yaml config.yaml
-touch nodes.txt
-mkdir -p logs
+mkdir -p data logs
 
 docker pull ghcr.io/amberpepper/proxyweave:latest
 
@@ -58,8 +51,7 @@ docker run -d \
   --name proxyweave \
   --network host \
   --restart unless-stopped \
-  -v $(pwd)/config.yaml:/etc/proxyweave/config.yaml \
-  -v $(pwd)/nodes.txt:/etc/proxyweave/nodes.txt \
+  -v $(pwd)/data:/app/data \
   -v $(pwd)/logs:/app/logs \
   ghcr.io/amberpepper/proxyweave:latest
 ```
@@ -73,8 +65,7 @@ docker run -d \
   -p 2323:2323 \
   -p 9091:9091 \
   -p 24000-24100:24000-24100 \
-  -v $(pwd)/config.yaml:/etc/proxyweave/config.yaml \
-  -v $(pwd)/nodes.txt:/etc/proxyweave/nodes.txt \
+  -v $(pwd)/data:/app/data \
   -v $(pwd)/logs:/app/logs \
   ghcr.io/amberpepper/proxyweave:latest
 ```
@@ -82,13 +73,21 @@ docker run -d \
 ### Run from source
 
 ```bash
-go run -tags "with_utls with_quic with_grpc with_wireguard with_gvisor with_clash_api" ./cmd/proxyweave --config config.yaml
+mkdir -p data logs
+
+go run -tags "with_utls with_quic with_grpc with_wireguard with_gvisor with_clash_api" ./cmd/proxyweave
 ```
 
 ## Access
 
 - WebUI: `http://localhost:9091`
 - Default proxy (pool): `127.0.0.1:2323`
+
+## Notes
+
+- SQLite is now the only source of truth.
+- Nodes, subscriptions, and runtime health state persist across restarts.
+- Manage subscriptions directly from **Node Management → Subscription Management**.
 
 ## Stop
 

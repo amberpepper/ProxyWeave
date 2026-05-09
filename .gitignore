@@ -19,6 +19,12 @@ GeoLite2-Country.mmdb
 *.log
 logs/
 
+# Local runtime data
+data/
+*.db
+*.db-shm
+*.db-wal
+
 # IDE and editor
 .idea/
 .vscode/

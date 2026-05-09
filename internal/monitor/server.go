@@ -27,6 +27,7 @@ import (
 	"golang.org/x/sync/semaphore"
 	"proxyweave/internal/config"
 	"proxyweave/internal/geoip"
+	storepkg "proxyweave/internal/store"
 )
 
 //go:embed assets/index.html
@@ -58,9 +59,13 @@ var (
 // SubscriptionRefresher interface for subscription manager.
 type SubscriptionRefresher interface {
 	RefreshNow() error
+	RefreshSubscription(ctx context.Context, id int64) error
 	Status() SubscriptionStatus
-	UpdateConfig(urls []string, enabled bool, interval time.Duration)
-	UpdateConfigAndRefresh(urls []string, enabled bool, interval time.Duration) error
+	ListSubscriptions(ctx context.Context) ([]storepkg.Subscription, error)
+	ListSubscriptionNodes(ctx context.Context, id int64, page int, pageSize int) (storepkg.SubscriptionNodesPage, error)
+	CreateSubscription(ctx context.Context, sub storepkg.Subscription) (storepkg.Subscription, error)
+	UpdateSubscription(ctx context.Context, sub storepkg.Subscription) (storepkg.Subscription, error)
+	DeleteSubscription(ctx context.Context, id int64) error
 }
 
 type ProxyTestFunc func(uri string, skipCertVerify bool, probeTarget string) (success bool, latencyMs int64, errMsg string)
@@ -69,6 +74,7 @@ type TrafficStatsFunc func() map[string][2]int64
 
 // SubscriptionStatus represents subscription refresh status.
 type SubscriptionStatus struct {
+	Enabled       bool      `json:"enabled"`
 	LastRefresh   time.Time `json:"last_refresh"`
 	NextRefresh   time.Time `json:"next_refresh"`
 	NodeCount     int       `json:"node_count"`
@@ -95,10 +101,11 @@ type Server struct {
 	// Concurrency control
 	probeSem *semaphore.Weighted
 
-	subRefresher SubscriptionRefresher
-	nodeMgr      NodeManager
-	proxyTestFn  ProxyTestFunc
-	trafficFn    TrafficStatsFunc
+	subRefresher  SubscriptionRefresher
+	nodeMgr       NodeManager
+	proxyTestFn   ProxyTestFunc
+	trafficFn     TrafficStatsFunc
+	settingsStore storepkg.SettingsStore
 }
 
 // NewServer constructs a server; it can be nil when disabled.
@@ -145,9 +152,11 @@ func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
 	mux.HandleFunc("/api/export", s.withAuth(s.handleExport))
 	mux.HandleFunc("/api/subscription/status", s.withAuth(s.handleSubscriptionStatus))
 	mux.HandleFunc("/api/subscription/refresh", s.withAuth(s.handleSubscriptionRefresh))
-	mux.HandleFunc("/api/subscription/config", s.withAuth(s.handleSubscriptionConfig))
+	mux.HandleFunc("/api/subscriptions", s.withAuth(s.handleSubscriptions))
+	mux.HandleFunc("/api/subscriptions/", s.withAuth(s.handleSubscriptionItem))
 	mux.HandleFunc("/api/reload", s.withAuth(s.handleReload))
 	mux.HandleFunc("/api/traffic", s.withAuth(s.handleTraffic))
+	mux.HandleFunc("/api/connections/status", s.withAuth(s.handleConnectionStatus))
 	mux.HandleFunc("/api/logs", s.withAuth(s.handleLogs))
 	s.srv = &http.Server{Addr: cfg.Listen, Handler: mux}
 	return s
@@ -176,6 +185,13 @@ func (s *Server) SetProxyTestFn(fn ProxyTestFunc) {
 func (s *Server) SetTrafficStatsFn(fn TrafficStatsFunc) {
 	if s != nil {
 		s.trafficFn = fn
+	}
+}
+
+// SetSettingsStore binds the persistent settings store for settings API.
+func (s *Server) SetSettingsStore(store storepkg.SettingsStore) {
+	if s != nil {
+		s.settingsStore = store
 	}
 }
 
@@ -262,6 +278,19 @@ func (s *Server) updateSettings(externalIP, probeTarget string, skipCertVerify b
 		s.cfgSrc.Log.Compress = logCfg.Compress
 	}
 
+	return s.persistSettingsLocked()
+}
+
+func (s *Server) persistSettingsLocked() error {
+	if s.cfgSrc == nil {
+		return errors.New("配置存储未初始化")
+	}
+	if s.settingsStore != nil {
+		if err := s.settingsStore.SaveSettings(context.Background(), s.cfgSrc); err != nil {
+			return fmt.Errorf("保存配置失败: %w", err)
+		}
+		return nil
+	}
 	if err := s.cfgSrc.SaveSettings(); err != nil {
 		return fmt.Errorf("保存配置失败: %w", err)
 	}
@@ -333,12 +362,25 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	allNodes := s.mgr.Snapshot()
 	totalNodes := len(allNodes)
 
-	// Calculate region statistics
+	// Calculate dashboard statistics.
 	regionStats := make(map[string]int)
 	regionHealthy := make(map[string]int)
 	healthyNodes := 0
 	blacklistedNodes := 0
 	activeConnections := 0
+	uniqueExitIPs := make(map[string]struct{})
+	type latencyBucket struct {
+		Label string `json:"label"`
+		Count int    `json:"count"`
+	}
+	latencyBuckets := []latencyBucket{
+		{Label: "<200ms"},
+		{Label: "200-500ms"},
+		{Label: "500ms-1s"},
+		{Label: "1-2s"},
+		{Label: ">2s"},
+		{Label: "未测试"},
+	}
 	for _, snap := range allNodes {
 		region := snap.Region
 		if region == "" {
@@ -346,6 +388,24 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		}
 		regionStats[region]++
 		activeConnections += int(snap.ActiveConnections)
+		if ip := strings.TrimSpace(snap.ExitIP); ip != "" {
+			uniqueExitIPs[ip] = struct{}{}
+		}
+		latency := snap.LastLatencyMs
+		switch {
+		case latency <= 0:
+			latencyBuckets[5].Count++
+		case latency < 200:
+			latencyBuckets[0].Count++
+		case latency < 500:
+			latencyBuckets[1].Count++
+		case latency < 1000:
+			latencyBuckets[2].Count++
+		case latency < 2000:
+			latencyBuckets[3].Count++
+		default:
+			latencyBuckets[4].Count++
+		}
 		// Count healthy nodes per region
 		if snap.InitialCheckDone && snap.Available && !snap.Blacklisted {
 			regionHealthy[region]++
@@ -420,13 +480,23 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		"total_pages":        totalPages,
 		"region_filter":      regionFilter,
 		"healthy_nodes":      healthyNodes,
+		"health_rate":        healthRate(totalNodes, healthyNodes),
 		"blacklisted_nodes":  blacklistedNodes,
 		"active_connections": activeConnections,
+		"unique_exit_ips":    len(uniqueExitIPs),
+		"latency_histogram":  latencyBuckets,
 		"region_stats":       regionStats,
 		"region_healthy":     regionHealthy,
 		"fastest_nodes":      fastestCandidates,
 	}
 	writeJSON(w, payload)
+}
+
+func healthRate(total, healthy int) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return float64(healthy) * 100 / float64(total)
 }
 
 func (s *Server) handleDebug(w http.ResponseWriter, r *http.Request) {
@@ -1717,7 +1787,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			_ = s.cfgSrc.SaveSettings()
+			_ = s.persistSettingsLocked()
 		}
 		s.cfgMu.Unlock()
 
@@ -1750,7 +1820,7 @@ func (s *Server) handleSubscriptionStatus(w http.ResponseWriter, r *http.Request
 
 	status := s.subRefresher.Status()
 	writeJSON(w, map[string]any{
-		"enabled":        true,
+		"enabled":        status.Enabled,
 		"last_refresh":   status.LastRefresh,
 		"next_refresh":   status.NextRefresh,
 		"node_count":     status.NodeCount,
@@ -1787,99 +1857,351 @@ func (s *Server) handleSubscriptionRefresh(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-// handleSubscriptionConfig handles GET/PUT for subscription configuration.
-func (s *Server) handleSubscriptionConfig(w http.ResponseWriter, r *http.Request) {
+// handleSubscriptions handles GET/POST for subscription records.
+func (s *Server) handleSubscriptions(w http.ResponseWriter, r *http.Request) {
+	if s.subRefresher == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, map[string]any{"error": "订阅管理未启用"})
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
-		s.cfgMu.RLock()
-		var urls []string
-		var enabled bool
-		var interval string
-		if s.cfgSrc != nil {
-			urls = s.cfgSrc.Subscriptions
-			enabled = s.cfgSrc.SubscriptionRefresh.Enabled
-			interval = s.cfgSrc.SubscriptionRefresh.Interval.String()
-		}
-		s.cfgMu.RUnlock()
-		writeJSON(w, map[string]any{
-			"subscriptions": urls,
-			"enabled":       enabled,
-			"interval":      interval,
-		})
-
-	case http.MethodPut:
-		var req struct {
-			Subscriptions []string `json:"subscriptions"`
-			Enabled       bool     `json:"enabled"`
-			Interval      string   `json:"interval"` // e.g. "1h", "30m"
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			writeJSON(w, map[string]any{"error": "请求格式错误"})
+		subs, err := s.subRefresher.ListSubscriptions(r.Context())
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			writeJSON(w, map[string]any{"error": err.Error()})
 			return
 		}
-
-		// Parse interval
-		interval, err := time.ParseDuration(req.Interval)
-		if err != nil || interval < 5*time.Minute {
-			interval = 1 * time.Hour // default
+		writeJSON(w, map[string]any{"subscriptions": subs})
+	case http.MethodPost:
+		sub, ok := s.decodeSubscriptionPayload(w, r)
+		if !ok {
+			return
 		}
-
-		// Clean URLs
-		var cleanURLs []string
-		for _, u := range req.Subscriptions {
-			u = strings.TrimSpace(u)
-			if u != "" {
-				cleanURLs = append(cleanURLs, u)
-			}
+		created, err := s.subRefresher.CreateSubscription(r.Context(), sub)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			writeJSON(w, map[string]any{"error": err.Error()})
+			return
 		}
-
-		// Update in-memory config and persist to disk
-		s.cfgMu.Lock()
-		if s.cfgSrc != nil {
-			s.cfgSrc.Subscriptions = cleanURLs
-			s.cfgSrc.SubscriptionRefresh.Enabled = req.Enabled
-			s.cfgSrc.SubscriptionRefresh.Interval = interval
-			// Always persist to disk regardless of subscription manager state
-			if err := s.cfgSrc.SaveSettings(); err != nil {
-				s.cfgMu.Unlock()
-				w.WriteHeader(http.StatusInternalServerError)
-				writeJSON(w, map[string]any{"error": fmt.Sprintf("保存配置失败: %v", err)})
-				return
-			}
-		}
-		s.cfgMu.Unlock()
-
-		// Hot-reload subscription manager and wait for refresh to complete
-		if s.subRefresher != nil {
-			if err := s.subRefresher.UpdateConfigAndRefresh(cleanURLs, req.Enabled, interval); err != nil {
-				// Config was saved but refresh failed — report partial success
-				writeJSON(w, map[string]any{
-					"message":       fmt.Sprintf("订阅配置已保存，但刷新失败: %v", err),
-					"subscriptions": cleanURLs,
-					"enabled":       req.Enabled,
-					"interval":      interval.String(),
-					"refresh_error": err.Error(),
-				})
-				return
-			}
-		}
-
-		status := SubscriptionStatus{}
-		if s.subRefresher != nil {
-			status = s.subRefresher.Status()
-		}
-		writeJSON(w, map[string]any{
-			"message":       "订阅配置已更新并生效",
-			"subscriptions": cleanURLs,
-			"enabled":       req.Enabled,
-			"interval":      interval.String(),
-			"node_count":    status.NodeCount,
-		})
-
+		writeJSON(w, map[string]any{"message": "订阅已创建", "subscription": created})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+// handleSubscriptionItem handles PUT/DELETE and one-shot refresh for a subscription.
+func (s *Server) handleSubscriptionItem(w http.ResponseWriter, r *http.Request) {
+	if s.subRefresher == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, map[string]any{"error": "订阅管理未启用"})
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/api/subscriptions/")
+	path = strings.Trim(path, "/")
+	if path == "" {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	parts := strings.Split(path, "/")
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || id <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, map[string]any{"error": "订阅 ID 无效"})
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "refresh" {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if err := s.subRefresher.RefreshSubscription(r.Context(), id); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			writeJSON(w, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]any{"message": "订阅刷新成功"})
+		return
+	}
+	if len(parts) == 2 && parts[1] == "nodes" {
+		s.handleSubscriptionNodes(w, r, id)
+		return
+	}
+	if len(parts) > 1 {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPut:
+		sub, ok := s.decodeSubscriptionPayload(w, r)
+		if !ok {
+			return
+		}
+		sub.ID = id
+		updated, err := s.subRefresher.UpdateSubscription(r.Context(), sub)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			writeJSON(w, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]any{"message": "订阅已更新", "subscription": updated})
+	case http.MethodDelete:
+		if err := s.subRefresher.DeleteSubscription(r.Context(), id); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			writeJSON(w, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]any{"message": "订阅已删除"})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleSubscriptionNodes(w http.ResponseWriter, r *http.Request, id int64) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	page := 1
+	if v, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page"))); err == nil && v > 0 {
+		page = v
+	}
+	pageSize := 20
+	if v, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page_size"))); err == nil && v > 0 {
+		pageSize = v
+	}
+	if pageSize <= 0 {
+		pageSize = 20
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+	keyword := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("keyword")))
+	regionFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("region")))
+	statusFilter := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
+	if statusFilter == "" {
+		statusFilter = "all"
+	}
+
+	if keyword == "" && regionFilter == "" && statusFilter == "all" {
+		nodePage, err := s.subRefresher.ListSubscriptionNodes(r.Context(), id, page, pageSize)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			writeJSON(w, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]any{
+			"nodes":       s.buildNodeViews(nodePage.Nodes),
+			"total":       nodePage.Total,
+			"page":        nodePage.Page,
+			"page_size":   nodePage.PageSize,
+			"total_pages": nodePage.TotalPages,
+		})
+		return
+	}
+
+	allNodes, err := s.listAllSubscriptionNodes(r.Context(), id)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+	views := s.buildNodeViews(allNodes)
+	filtered := make([]configNodeView, 0, len(views))
+	for _, view := range views {
+		if matchesSubscriptionNodeFilters(view, keyword, regionFilter, statusFilter) {
+			filtered = append(filtered, view)
+		}
+	}
+	total := len(filtered)
+	totalPages := 0
+	if total > 0 {
+		totalPages = (total + pageSize - 1) / pageSize
+	}
+	if totalPages == 0 {
+		page = 1
+	} else if page > totalPages {
+		page = totalPages
+	}
+	start, end := 0, 0
+	if total > 0 {
+		start = (page - 1) * pageSize
+		if start < 0 {
+			start = 0
+		}
+		if start > total {
+			start = total
+		}
+		end = start + pageSize
+		if end > total {
+			end = total
+		}
+	}
+	pageViews := []configNodeView{}
+	if total > 0 && start < end {
+		pageViews = filtered[start:end]
+	}
+	writeJSON(w, map[string]any{
+		"nodes":       pageViews,
+		"total":       total,
+		"page":        page,
+		"page_size":   pageSize,
+		"total_pages": totalPages,
+	})
+}
+
+func (s *Server) listAllSubscriptionNodes(ctx context.Context, id int64) ([]config.NodeConfig, error) {
+	const pageSize = 200
+	page := 1
+	var out []config.NodeConfig
+	for {
+		nodePage, err := s.subRefresher.ListSubscriptionNodes(ctx, id, page, pageSize)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, nodePage.Nodes...)
+		if nodePage.TotalPages <= 0 || page >= nodePage.TotalPages {
+			break
+		}
+		page++
+	}
+	return out, nil
+}
+
+func matchesSubscriptionNodeFilters(view configNodeView, keyword, regionFilter, statusFilter string) bool {
+	if keyword != "" {
+		parts := []string{view.Name, view.URI, string(view.Source)}
+		if view.Runtime != nil {
+			parts = append(parts, view.Runtime.Tag, view.Runtime.ExitIP, view.Runtime.Country, view.Runtime.CountryCode, view.Runtime.ISP, view.Runtime.ASN, view.Runtime.ASName)
+		}
+		if !strings.Contains(strings.ToLower(strings.Join(parts, " ")), keyword) {
+			return false
+		}
+	}
+	if regionFilter != "" {
+		parts := []string{}
+		if view.Runtime != nil {
+			parts = append(parts, view.Runtime.Region, view.Runtime.Country, view.Runtime.CountryCode, view.Runtime.ExitIP)
+		}
+		if !strings.Contains(strings.ToLower(strings.Join(parts, " ")), regionFilter) {
+			return false
+		}
+	}
+	switch statusFilter {
+	case "healthy":
+		return view.RuntimeState == "healthy"
+	case "unhealthy":
+		return view.RuntimeState == "unhealthy" || view.RuntimeState == "blacklisted"
+	case "unknown":
+		return view.RuntimeState == "unknown"
+	default:
+		return true
+	}
+}
+
+func (s *Server) buildNodeViews(nodes []config.NodeConfig) []configNodeView {
+	snapshots := s.mgr.Snapshot()
+	byURI := make(map[string]Snapshot, len(snapshots))
+	byName := make(map[string]Snapshot, len(snapshots))
+	for _, snap := range snapshots {
+		if snap.URI != "" {
+			byURI[snap.URI] = snap
+		}
+		if snap.Name != "" {
+			byName[snap.Name] = snap
+		}
+	}
+	trafficMap := make(map[string][2]int64)
+	if s.trafficFn != nil {
+		trafficMap = s.trafficFn()
+	}
+	out := make([]configNodeView, 0, len(nodes))
+	for _, node := range nodes {
+		view := configNodeView{NodeConfig: node, RuntimeState: "unknown"}
+		var snap Snapshot
+		var ok bool
+		if node.URI != "" {
+			snap, ok = byURI[node.URI]
+		}
+		if !ok && node.Name != "" {
+			snap, ok = byName[node.Name]
+		}
+		if ok {
+			view.Runtime = &configNodeRuntimeSummary{
+				Tag:              snap.Tag,
+				Available:        snap.Available,
+				InitialCheckDone: snap.InitialCheckDone,
+				Blacklisted:      snap.Blacklisted,
+				FailureCount:     snap.FailureCount,
+				LastLatencyMs:    snap.LastLatencyMs,
+				Region:           snap.NodeInfo.Region,
+				CountryCode:      snap.QualityInfo.CountryCode,
+				Country:          snap.QualityInfo.Country,
+				ExitIP:           snap.ExitIP,
+				ProxyType:        snap.ProxyType,
+				IPValid:          snap.IPValid,
+				QualityError:     snap.Error,
+				ActiveConns:      snap.ActiveConnections,
+				ISP:              snap.ISP,
+				ASN:              snap.ASN,
+				ASName:           snap.ASName,
+				IPVersion:        snap.IPVersion,
+				IPType:           snap.IPType,
+				IPInvalidReason:  snap.IPInvalidReason,
+				Mobile:           snap.Mobile,
+				Hosting:          snap.Hosting,
+				Proxy:            snap.Proxy,
+			}
+			if tag := snap.Tag; tag != "" {
+				if td, found := trafficMap[tag]; found {
+					view.Runtime.UploadBytes = td[0]
+					view.Runtime.DownloadBytes = td[1]
+				}
+			}
+			switch {
+			case snap.Blacklisted:
+				view.RuntimeState = "blacklisted"
+			case snap.InitialCheckDone && !snap.Available:
+				view.RuntimeState = "unhealthy"
+			case snap.InitialCheckDone && snap.Available:
+				view.RuntimeState = "healthy"
+			default:
+				view.RuntimeState = "unknown"
+			}
+		}
+		out = append(out, view)
+	}
+	return out
+}
+
+func (s *Server) decodeSubscriptionPayload(w http.ResponseWriter, r *http.Request) (storepkg.Subscription, bool) {
+	var req struct {
+		Name            string `json:"name"`
+		URL             string `json:"url"`
+		Enabled         bool   `json:"enabled"`
+		RefreshInterval string `json:"refresh_interval"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, map[string]any{"error": "请求格式错误"})
+		return storepkg.Subscription{}, false
+	}
+
+	interval, err := time.ParseDuration(strings.TrimSpace(req.RefreshInterval))
+	if err != nil || interval < 5*time.Minute {
+		interval = time.Hour
+	}
+
+	return storepkg.Subscription{
+		Name:            strings.TrimSpace(req.Name),
+		URL:             strings.TrimSpace(req.URL),
+		Enabled:         req.Enabled,
+		RefreshInterval: interval,
+	}, true
 }
 
 // nodePayload is the JSON request body for node CRUD operations.
@@ -2261,6 +2583,74 @@ func (s *Server) respondNodeError(w http.ResponseWriter, err error) {
 	}
 	w.WriteHeader(status)
 	writeJSON(w, map[string]any{"error": err.Error()})
+}
+
+func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://127.0.0.1:9092/connections")
+	if err != nil {
+		writeJSON(w, map[string]any{
+			"active":          0,
+			"inbound":         0,
+			"outbound_routes": 0,
+			"error":           err.Error(),
+		})
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		writeJSON(w, map[string]any{
+			"active":          0,
+			"inbound":         0,
+			"outbound_routes": 0,
+			"error":           fmt.Sprintf("clash api status: %d", resp.StatusCode),
+		})
+		return
+	}
+	var payload struct {
+		DownloadTotal int64 `json:"downloadTotal"`
+		UploadTotal   int64 `json:"uploadTotal"`
+		Connections   []struct {
+			Chains   []string `json:"chains"`
+			Upload   int64    `json:"upload"`
+			Download int64    `json:"download"`
+			Metadata struct {
+				Type string `json:"type"`
+			} `json:"metadata"`
+		} `json:"connections"`
+		Memory uint64 `json:"memory"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		writeJSON(w, map[string]any{
+			"active":          0,
+			"inbound":         0,
+			"outbound_routes": 0,
+			"error":           err.Error(),
+		})
+		return
+	}
+	routes := make(map[string]struct{})
+	for _, conn := range payload.Connections {
+		for i := len(conn.Chains) - 1; i >= 0; i-- {
+			chain := strings.TrimSpace(conn.Chains[i])
+			if chain != "" {
+				routes[chain] = struct{}{}
+				break
+			}
+		}
+	}
+	writeJSON(w, map[string]any{
+		"active":          len(payload.Connections),
+		"inbound":         len(payload.Connections),
+		"outbound_routes": len(routes),
+		"upload_total":    payload.UploadTotal,
+		"download_total":  payload.DownloadTotal,
+		"memory":          payload.Memory,
+	})
 }
 
 // handleTraffic streams real-time traffic from sing-box Clash API as SSE.

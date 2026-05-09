@@ -2,6 +2,7 @@ package boxmgr
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -16,6 +17,7 @@ import (
 	"proxyweave/internal/geoip"
 	"proxyweave/internal/monitor"
 	"proxyweave/internal/outbound/pool"
+	storepkg "proxyweave/internal/store"
 
 	"github.com/sagernet/sing-box"
 	C "github.com/sagernet/sing-box/constant"
@@ -44,9 +46,19 @@ type Logger interface {
 // Option configures the Manager.
 type Option func(*Manager)
 
+type RuntimeStore interface {
+	storepkg.AppStore
+	monitor.StateStore
+}
+
 // WithLogger sets a custom logger.
 func WithLogger(l Logger) Option {
 	return func(m *Manager) { m.logger = l }
+}
+
+// WithStore sets the persistent application store.
+func WithStore(store RuntimeStore) Option {
+	return func(m *Manager) { m.store = store }
 }
 
 // Manager owns the lifecycle of the active sing-box instance.
@@ -59,6 +71,7 @@ type Manager struct {
 	geoRouter     *geoip.Router
 	cfg           *config.Config
 	monitorCfg    monitor.Config
+	store         RuntimeStore
 
 	drainTimeout        time.Duration
 	minAvailableNodes   int
@@ -658,6 +671,12 @@ func (m *Manager) ensureMonitor(ctx context.Context) error {
 		return fmt.Errorf("init monitor manager: %w", err)
 	}
 	monitorMgr.SetLogger(monitorLoggerAdapter{logger: m.logger})
+	if m.store != nil {
+		if err := monitorMgr.SetStateStore(m.store); err != nil {
+			m.mu.Unlock()
+			return fmt.Errorf("init monitor state store: %w", err)
+		}
+	}
 	m.monitorMgr = monitorMgr
 
 	var serverToStart *monitor.Server
@@ -740,7 +759,16 @@ var errConfigUnavailable = errors.New("config is not initialized")
 
 // ListConfigNodes returns a copy of all configured nodes.
 func (m *Manager) ListConfigNodes(ctx context.Context) ([]config.NodeConfig, error) {
-	_ = ctx
+	if m.store != nil {
+		nodes, err := m.store.ListNodeConfigs(ctx)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return []config.NodeConfig{}, nil
+			}
+			return nil, err
+		}
+		return cloneNodes(nodes), nil
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -781,6 +809,16 @@ func (m *Manager) CreateNode(ctx context.Context, node config.NodeConfig) (confi
 		normalized.Source = config.NodeSourceInline
 	}
 
+	if m.store != nil {
+		created, err := m.store.CreateNode(ctx, normalized)
+		if err != nil {
+			return config.NodeConfig{}, fmt.Errorf("save node: %w", err)
+		}
+		if err := m.reloadConfigFromStoreLocked(ctx); err != nil {
+			return config.NodeConfig{}, err
+		}
+		return created, nil
+	}
 	m.cfg.Nodes = append(m.cfg.Nodes, normalized)
 	if err := m.cfg.Save(); err != nil {
 		m.cfg.Nodes = m.cfg.Nodes[:len(m.cfg.Nodes)-1]
@@ -818,6 +856,19 @@ func (m *Manager) UpdateNode(ctx context.Context, name string, node config.NodeC
 	// Preserve the original source
 	normalized.Source = m.cfg.Nodes[idx].Source
 
+	if m.store != nil {
+		updated, err := m.store.UpdateNodeByName(ctx, name, normalized)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return config.NodeConfig{}, monitor.ErrNodeNotFound
+			}
+			return config.NodeConfig{}, fmt.Errorf("save node: %w", err)
+		}
+		if err := m.reloadConfigFromStoreLocked(ctx); err != nil {
+			return config.NodeConfig{}, err
+		}
+		return updated, nil
+	}
 	prev := m.cfg.Nodes[idx]
 	m.cfg.Nodes[idx] = normalized
 	if err := m.cfg.Save(); err != nil {
@@ -848,6 +899,15 @@ func (m *Manager) DeleteNode(ctx context.Context, name string) error {
 		return monitor.ErrNodeNotFound
 	}
 
+	if m.store != nil {
+		if err := m.store.DeleteNodeByName(ctx, name); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return monitor.ErrNodeNotFound
+			}
+			return fmt.Errorf("delete node: %w", err)
+		}
+		return m.reloadConfigFromStoreLocked(ctx)
+	}
 	backup := cloneNodes(m.cfg.Nodes)
 	m.cfg.Nodes = append(m.cfg.Nodes[:idx], m.cfg.Nodes[idx+1:]...)
 	if err := m.cfg.Save(); err != nil {
@@ -869,6 +929,14 @@ func (m *Manager) TriggerReload(ctx context.Context) error {
 	cfgCopy := m.copyConfigLocked()
 	portMap := m.cfg.BuildPortMap() // Preserve existing port assignments
 	m.mu.RUnlock()
+
+	if m.store != nil {
+		loaded, err := m.store.LoadConfig(ctx)
+		if err != nil {
+			return fmt.Errorf("load config from store: %w", err)
+		}
+		cfgCopy = loaded
+	}
 
 	if cfgCopy == nil {
 		return errConfigUnavailable
@@ -981,6 +1049,21 @@ func (m *Manager) copyConfigLocked() *config.Config {
 	}
 	cloned.SetFilePath(m.cfg.FilePath())
 	return &cloned
+}
+
+func (m *Manager) reloadConfigFromStoreLocked(ctx context.Context) error {
+	if m.store == nil {
+		return nil
+	}
+	cfg, err := m.store.LoadConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("load config from store: %w", err)
+	}
+	m.cfg = cfg
+	if m.monitorServer != nil {
+		m.monitorServer.SetConfig(m.cfg)
+	}
+	return nil
 }
 
 func (m *Manager) nodeIndexLocked(name string) int {

@@ -2,40 +2,32 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
-	"time"
 
 	"proxyweave/internal/app"
 	"proxyweave/internal/config"
 	"proxyweave/internal/monitor"
+	"proxyweave/internal/store/sqlite"
 
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 func main() {
-	var configPath string
-	flag.StringVar(&configPath, "config", "config.yaml", "path to config file")
-	flag.Parse()
+	dbPath := filepath.Join("data", "proxyweave.db")
 
-	var cfg *config.Config
-	for attempt := 1; attempt <= 3; attempt++ {
-		var err error
-		cfg, err = config.Load(configPath)
-		if err == nil {
-			break
-		}
-		if attempt < 3 && strings.Contains(err.Error(), "config.nodes cannot be empty") {
-			log.Printf("⚠️  Attempt %d/3: %v (retrying in %ds...)", attempt, err, attempt*10)
-			time.Sleep(time.Duration(attempt*10) * time.Second)
-			continue
-		}
-		log.Fatalf("load config: %v", err)
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		log.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	cfg, err := db.LoadConfig(context.Background())
+	if err != nil {
+		log.Fatalf("load config from sqlite: %v", err)
 	}
 
 	// Setup logging based on config
@@ -44,7 +36,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if err := app.Run(ctx, cfg); err != nil {
+	if err := app.Run(ctx, cfg, db); err != nil {
 		fmt.Fprintf(os.Stderr, "proxy pool exited with error: %v\n", err)
 		os.Exit(1)
 	}

@@ -145,33 +145,6 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .sidebar-footer {
-      padding: 0 20px 16px;
-      text-align: center;
-    }
-    .sidebar-footer-link {
-      display:inline-flex;
-      align-items:center;
-      gap:6px;
-      color:var(--text-muted);
-      text-decoration:none;
-      font-size:12px;
-      padding:6px 10px;
-      border-radius:6px;
-      border:1px solid var(--border);
-      transition:all 0.2s;
-      max-width: 100%;
-      overflow: hidden;
-    }
-    .sidebar-footer-link:hover {
-      border-color: var(--primary);
-      color: var(--text-main);
-    }
-    .sidebar-footer-text {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
     .sidebar-toggle {
       width: 32px;
       height: 32px;
@@ -201,31 +174,21 @@
       padding: 0 12px;
       justify-content: center;
     }
-    body.sidebar-collapsed .brand-toggle {
-      display: none;
-    }
-    body.sidebar-collapsed .brand-text,
-    body.sidebar-collapsed .nav-text,
-    body.sidebar-collapsed .sidebar-footer-text {
-      opacity: 0;
-      width: 0;
-      pointer-events: none;
-    }
     body.sidebar-collapsed .nav-item {
       padding: 10px 0;
       justify-content: center;
       gap: 0;
     }
+    body.sidebar-collapsed .brand-text,
+    body.sidebar-collapsed .nav-text {
+      width: 0;
+      max-width: 0;
+      opacity: 0;
+      overflow: hidden;
+      pointer-events: none;
+    }
     body.sidebar-collapsed .nav-item.active {
       border-right-width: 2px;
-    }
-    body.sidebar-collapsed .sidebar-footer {
-      padding: 0 12px 16px;
-    }
-    body.sidebar-collapsed .sidebar-footer-link {
-      justify-content: center;
-      padding: 8px;
-      width: 100%;
     }
     body.sidebar-collapsed #sidebarToggleBtn .svg-icon {
       transform: rotate(180deg);
@@ -347,8 +310,6 @@
     .btn-danger:hover { background: #dc2626; border-color: #dc2626; color: #fff; }
     .btn-warning { background: var(--warning); border-color: var(--warning); color: #111827; }
     .btn-warning:hover { background: #d97706; border-color: #d97706; color: #111827; }
-    .btn-sm { padding: 4px 10px; font-size: 11px; }
-    .btn-compact { padding: 6px 12px; font-size: 12px; line-height: 1.2; white-space: nowrap; }
     .svg-icon {
       width: 14px;
       height: 14px;
@@ -423,19 +384,14 @@
     .table-container { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; text-align: left; }
     .config-nodes-table {
-      width: max-content;
-      min-width: 1580px;
+      width: 100%;
+      min-width: 1240px;
       table-layout: auto;
     }
     .config-nodes-table th,
     .config-nodes-table td {
       vertical-align: middle;
       white-space: nowrap;
-    }
-    .config-nodes-table td.wrap-uri {
-      max-width: 340px;
-      overflow: hidden;
-      text-overflow: ellipsis;
     }
     .config-nodes-table td.wrap-quality {
       min-width: 220px;
@@ -449,6 +405,95 @@
       min-width: 300px;
       white-space: normal;
       position: relative;
+    }
+
+    .subscriptions-table {
+      width: 100%;
+      min-width: 0;
+      table-layout: fixed;
+    }
+    .subscriptions-table th,
+    .subscriptions-table td {
+      vertical-align: middle;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .subscriptions-table th:nth-child(1) { width: 14%; }
+    .subscriptions-table th:nth-child(2) { width: 26%; }
+    .subscriptions-table th:nth-child(3) { width: 8%; }
+    .subscriptions-table th:nth-child(4) { width: 9%; }
+    .subscriptions-table th:nth-child(5) { width: 16%; }
+    .subscriptions-table th:nth-child(6) { width: 6%; }
+    .subscriptions-table th:nth-child(7) { width: 11%; }
+    .subscriptions-table th:nth-child(8) { width: 10%; }
+    .subscription-url-text,
+    .subscription-error-cell {
+      display: block;
+      width: 100%;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    .subscription-url-text {
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+    .subscription-card-list {
+      display: none;
+      padding: 12px;
+      gap: 12px;
+      flex-direction: column;
+    }
+    .subscription-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg-input);
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+    .subscription-card-head,
+    .subscription-card-meta,
+    .subscription-card-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .subscription-actions {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: nowrap;
+      white-space: nowrap;
+      min-width: 0;
+    }
+    .subscription-card-url {
+      color: var(--text-muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 420px;
+    }
+    .subscriptions-panel {
+      overflow: visible;
+    }
+    .subscriptions-table-wrap {
+      overflow: visible;
+    }
+    .subscriptions-table td {
+      overflow: visible;
+    }
+    @media (max-width: 1180px) {
+      .subscriptions-table-wrap { display: none; }
+      .subscription-card-list { display: flex; }
     }
     .action-group {
       display: flex;
@@ -479,7 +524,14 @@
       gap: 6px;
       z-index: 30;
     }
-    .action-dropdown.open .action-menu {
+    .action-menu.floating {
+      position: fixed;
+      right: auto;
+      top: auto;
+      z-index: 3000;
+    }
+    .action-dropdown.open .action-menu,
+    .action-menu.floating.open {
       display: flex;
     }
     .action-menu .btn {
@@ -574,6 +626,7 @@
       border-radius: 8px; width: 400px; box-shadow: var(--shadow-md);
     }
     .modal.modal-wide { width: min(720px, calc(100vw - 32px)); }
+    .modal.modal-xwide { width: min(1080px, calc(100vw - 32px)); }
     .modal-header { padding: 16px 24px; border-bottom: 1px solid var(--border); font-size: 16px; font-weight: 600; }
     .modal-body { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
     .modal-footer { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; }
@@ -763,6 +816,106 @@
       z-index: 10;
     }
     .chart-container { width: 100%; height: 100%; }
+    .dashboard-charts {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .dashboard-charts .chart-panel {
+      height: 420px;
+    }
+    @media (max-width: 980px) {
+      .dashboard-charts { grid-template-columns: 1fr; }
+    }
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 4px;
+    }
+    .chart-summary {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+    }
+    .region-cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+    }
+    .region-card {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      min-height: 110px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      box-shadow: var(--shadow-sm);
+    }
+    .region-card-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .region-card-code {
+      font-weight: 700;
+      font-size: 15px;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .region-card-count {
+      font-family: var(--font-mono);
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+    .region-card-meta {
+      font-size: 12px;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .region-card-rate {
+      margin-top: 10px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .region-details-table-wrap {
+      max-height: 360px;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg-input);
+    }
+    .region-details-table {
+      width: 100%;
+      min-width: 520px;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .region-details-table th,
+    .region-details-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    .region-details-table tbody tr:last-child td {
+      border-bottom: none;
+    }
+    .region-details-table td.num,
+    .region-details-table th.num {
+      text-align: right;
+      font-family: var(--font-mono);
+    }
+    .region-details-table .rate-good { color: var(--success); }
+    .region-details-table .rate-mid { color: var(--warning); }
+    .region-details-table .rate-bad { color: var(--error); }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
   <script>
@@ -888,9 +1041,6 @@
         </div>
         <span class="brand-text">ProxyWeave</span>
       </div>
-      <button class="sidebar-toggle brand-toggle" type="button" onclick="toggleSidebar()" title="收起侧边栏">
-        <svg class="svg-icon" aria-hidden="true"><use href="#i-panel-left"></use></svg>
-      </button>
     </div>
     <div class="nav">
       <div class="nav-item active" onclick="switchTab('dashboard')" title="监控看板">
@@ -900,6 +1050,10 @@
       <div class="nav-item" onclick="switchTab('manage')" title="节点配置">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
         <span class="nav-text">节点配置</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('subscriptions')" title="订阅管理">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+        <span class="nav-text">订阅管理</span>
       </div>
       <div class="nav-item" onclick="switchTab('debug')" title="诊断分析">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
@@ -917,13 +1071,6 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
         <span class="nav-text">系统设置</span>
       </div>
-    </div>
-    <div class="sidebar-footer">
-      <a href="https://github.com/amberpepper/ProxyWeave" target="_blank" rel="noopener" class="sidebar-footer-link" title="GitHub 项目">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-        <span class="sidebar-footer-text" id="githubStars">-</span>
-      </a>
     </div>
   </aside>
 
@@ -944,10 +1091,6 @@
         <button class="sidebar-toggle" id="sidebarToggleBtn" type="button" onclick="toggleSidebar()" title="收起侧边栏" aria-label="切换侧边栏">
           <svg class="svg-icon" aria-hidden="true"><use href="#i-panel-left"></use></svg>
         </button>
-        <div class="status-indicator">
-          <div class="status-dot"></div>
-          <span id="lastUpdate">System Online</span>
-        </div>
       </div>
       <div class="header-actions">
         <button class="theme-toggle" id="themeToggleBtn" onclick="toggleTheme()" title="切换主题" data-mode="auto">
@@ -972,47 +1115,80 @@
           <div class="stat-panel">
             <div class="stat-title">总节点数</div>
             <div class="stat-value" id="totalNodes">0</div>
-            <div class="stat-sub"><span id="subscriptionStatus"></span> <span id="subscriptionTrend"></span></div>
+            <div class="stat-sub" id="totalSummary">全部代理节点</div>
           </div>
           <div class="stat-panel">
-            <div class="stat-title">健康在线</div>
-            <div class="stat-value" style="color: var(--success);" id="healthyNodes">0</div>
-            <div class="stat-sub">Active & Ready</div>
+            <div class="stat-title">节点健康率</div>
+            <div class="stat-value" style="color: var(--success);" id="healthRate">0%</div>
+            <div class="stat-sub" id="healthSummary">健康 0 / 总计 0</div>
           </div>
           <div class="stat-panel">
-            <div class="stat-title">活跃连接数</div>
+            <div class="stat-title">实时吞吐</div>
+            <div class="stat-value" style="color: var(--primary); font-size: 22px;" id="liveThroughput">0 B/s</div>
+            <div class="stat-sub">下载 <span id="liveDownSpeed">0 B/s</span> · 上传 <span id="liveUpSpeed">0 B/s</span></div>
+          </div>
+          <div class="stat-panel">
+            <div class="stat-title">实时连接数</div>
             <div class="stat-value" style="color: var(--primary);" id="activeConnections">0</div>
-            <div class="stat-sub">当前建立会话</div>
+            <div class="stat-sub" id="connectionBreakdown">入站 0 · 出站 0</div>
+          </div>
+          <div class="stat-panel">
+            <div class="stat-title">唯一出口 IP</div>
+            <div class="stat-value" style="color: #a78bfa;" id="uniqueExitIPs">0</div>
+            <div class="stat-sub">已质量检查的出口去重</div>
           </div>
           <div class="stat-panel">
             <div class="stat-title">异常/拉黑</div>
             <div class="stat-value" style="color: var(--error);" id="blacklistedNodes">0</div>
             <div class="stat-sub">不可用节点</div>
           </div>
-          <div class="stat-panel">
-            <div class="stat-title"><svg class="svg-icon sm" aria-hidden="true"><use href="#i-arrow-up"></use></svg>上行速率</div>
-            <div class="stat-value" style="color: #3b82f6; font-size: 22px;" id="liveUpSpeed">0 B/s</div>
-            <div class="stat-sub" style="color: var(--text-muted);">实时上传</div>
+        </div>
+
+        <div class="panel" style="margin-bottom: 24px;">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">地域连通率 (Region Availability)</div>
+              <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">上方卡片看国家分布，下方表格看精确数据</div>
+            </div>
           </div>
-          <div class="stat-panel">
-            <div class="stat-title"><svg class="svg-icon sm" aria-hidden="true"><use href="#i-arrow-down"></use></svg>下行速率</div>
-            <div class="stat-value" style="color: #10b981; font-size: 22px;" id="liveDownSpeed">0 B/s</div>
-            <div class="stat-sub" style="color: var(--text-muted);">实时下载</div>
+          <div style="padding:16px;">
+            <div class="region-cards-grid" id="regionCardsGrid"></div>
+            <div class="table-container region-details-table-wrap" style="margin-top:16px;">
+              <table class="region-details-table">
+                <thead>
+                  <tr>
+                    <th>国家/地区</th>
+                    <th class="num">总节点</th>
+                    <th class="num">可用</th>
+                    <th class="num">不可用</th>
+                    <th class="num">连通率</th>
+                  </tr>
+                </thead>
+                <tbody id="regionDetailsTableBody"></tbody>
+              </table>
+            </div>
           </div>
         </div>
 
-        <div class="charts-grid">
-          <div class="chart-panel">
-            <div class="chart-title">地域连通率 (Region Availability)</div>
-            <div class="chart-container" id="regionChart"></div>
-          </div>
-          <div class="chart-panel">
+        <div class="charts-grid dashboard-charts">
+          <div class="chart-panel latency-chart-panel">
             <div class="chart-title">最优节点延迟 (Top Fastest Nodes)</div>
             <div class="chart-container" id="latencyChart"></div>
           </div>
           <div class="chart-panel">
-            <div class="chart-title">实时流量带宽 (Real-time Traffic)</div>
+            <div class="chart-title">吞吐趋势 (Traffic Throughput)</div>
             <div class="chart-container" id="trafficChart"></div>
+          </div>
+        </div>
+
+        <div class="charts-grid dashboard-charts">
+          <div class="chart-panel">
+            <div class="chart-title">节点延迟分布 (Latency Distribution)</div>
+            <div class="chart-container" id="latencyDistChart"></div>
+          </div>
+          <div class="chart-panel">
+            <div class="chart-title">节点池趋势 (Node Pool Trend)</div>
+            <div class="chart-container" id="poolTrendChart"></div>
           </div>
         </div>
 
@@ -1060,61 +1236,18 @@
       <div id="manageTab" class="tab-content">
         <div style="display:flex; justify-content:space-between; margin-bottom: 20px;">
           <div>
-            <h2 style="font-size: 18px; margin-bottom: 4px;">配置管理</h2>
+            <h2 style="font-size: 18px; margin-bottom: 4px;">节点配置</h2>
             <p style="color: var(--text-muted); font-size: 12px;">修改配置后点击上方重载按钮生效</p>
           </div>
           <div style="display:flex; gap: 10px; align-items:center; flex-wrap:wrap;">
-            <button class="btn btn-primary btn-compact" onclick="showAddNodeModal()"><svg class="svg-icon" aria-hidden="true"><use href="#i-plus"></use></svg>添加节点</button>
-          </div>
-        </div>
-
-        <div class="panel" style="margin-bottom: 16px;">
-          <div class="panel-header">
-            <div>
-              <div class="panel-title">订阅 / API / GitHub Raw 定时拉取</div>
-              <div id="manageSubSummary" style="font-size:12px; color:var(--text-muted); margin-top:4px;">未加载</div>
-            </div>
-            <div style="display:flex; gap:8px;">
-              <div class="collapse-toggle" id="manageSubToggle" onclick="toggleManageSubPanel()"><span class="arrow"><svg class="svg-icon sm" aria-hidden="true"><use href="#i-arrow-right"></use></svg></span><span id="manageSubToggleText">展开</span></div>
-              <button class="btn" onclick="refreshSubscription()">立即拉取</button>
-              <button class="btn btn-primary" onclick="saveManageSubscriptionConfig()">保存并拉取</button>
-            </div>
-          </div>
-          <div id="manageSubPanelBody" class="collapsible-body">
-          <div style="padding: 16px;">
-            <div class="checkbox-grid">
-              <div class="checkbox-row"><input type="checkbox" id="manageSubEnabled" /><label for="manageSubEnabled">启用定时拉取</label></div>
-            </div>
-            <div style="display: grid; grid-template-columns: 220px 1fr; gap: 16px; align-items: end;">
-              <div class="form-group">
-                <label>拉取间隔</label>
-                <select id="manageSubInterval" class="setting-input">
-                  <option value="10m">10 分钟</option><option value="30m">30 分钟</option>
-                  <option value="1h">1 小时</option><option value="3h">3 小时</option>
-                  <option value="6h">6 小时</option><option value="12h">12 小时</option>
-                  <option value="24h">24 小时</option>
-                </select>
-              </div>
-              <div id="manageSubStatus" style="font-size:12px; color:var(--text-muted); padding-bottom:8px;">未加载</div>
-            </div>
-            <div class="form-group" style="margin-top: 12px;">
-              <label>拉取 URL（每行一个，支持 API / GitHub Raw / 普通订阅）</label>
-              <textarea id="manageSubURLs" rows="4" class="setting-input" placeholder="https://api.example.com/proxies
-https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertical; font-size:12px;"></textarea>
-            </div>
-            <div style="font-size: 11px; color: var(--success); margin-top: 8px;">返回内容支持 Base64、纯文本节点列表（一行一个 URI）或 Clash YAML。开启定时拉取后会按间隔自动刷新并 reload。</div>
-          </div>
+            <button class="btn btn-primary" onclick="showAddNodeModal()"><svg class="svg-icon" aria-hidden="true"><use href="#i-plus"></use></svg>添加节点</button>
           </div>
         </div>
         
-        <div id="subscriptionWarning" style="display:none; background: rgba(245, 158, 11, 0.1); border: 1px solid var(--warning); padding: 12px; border-radius: 6px; color: var(--warning); margin-bottom: 16px; font-size: 12px;">
-          <svg class="svg-icon icon-warning" aria-hidden="true"><use href="#i-alert"></use></svg> 警告：当前使用订阅模式。订阅节点会在下次定时拉取时更新；Web 手动添加的节点会保留。
-        </div>
-
         <div class="panel">
           <div class="toolbar-row">
             <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-              <input type="text" id="configNodeKeyword" class="setting-input" placeholder="搜索名称 / URI" style="width:260px;" />
+              <input type="text" id="configNodeKeyword" class="setting-input" placeholder="搜索名称 / 地址" style="width:260px;" />
               <input type="text" id="configNodeRegionFilter" class="setting-input" placeholder="地域，如 US / JP / TW" style="width:180px;" />
               <select id="configNodeSourceFilter" class="setting-input" style="width:160px;">
                 <option value="all">全部来源</option>
@@ -1134,16 +1267,16 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
                 <option value="50">50 / 页</option>
                 <option value="100">100 / 页</option>
               </select>
+              <button class="btn" onclick="searchConfigNodes()"><svg class="svg-icon" aria-hidden="true"><use href="#i-search"></use></svg>搜索</button>
+              <button class="btn" onclick="resetConfigNodeFilters()"><svg class="svg-icon" aria-hidden="true"><use href="#i-refresh"></use></svg>重置</button>
             </div>
             <div style="display:flex; gap:8px; align-items:center;">
-              <button class="btn" onclick="searchConfigNodes()"><svg class="svg-icon" aria-hidden="true"><use href="#i-search"></use></svg>搜索</button>
               <button class="btn btn-danger" onclick="deleteUnhealthyConfigNodes()"><svg class="svg-icon" aria-hidden="true"><use href="#i-trash"></use></svg>删除当前页失效</button>
-              <button class="btn" onclick="resetConfigNodeFilters()"><svg class="svg-icon" aria-hidden="true"><use href="#i-refresh"></use></svg>重置</button>
             </div>
           </div>
           <div class="table-container">
             <table class="config-nodes-table">
-              <thead><tr><th style="min-width:160px;">名称</th><th style="min-width:340px;">URI</th><th style="min-width:72px;">端口</th><th style="min-width:96px;">来源</th><th style="min-width:110px;">地域</th><th style="min-width:92px;">状态</th><th style="min-width:84px;">延迟</th><th style="min-width:72px;">失败</th><th style="min-width:220px;">出口 / 类型</th><th style="min-width:320px;">操作</th></tr></thead>
+              <thead><tr><th style="min-width:220px;">名称</th><th style="min-width:72px;">端口</th><th style="min-width:96px;">来源</th><th style="min-width:110px;">地域</th><th style="min-width:92px;">状态</th><th style="min-width:84px;">延迟</th><th style="min-width:72px;">失败</th><th style="min-width:220px;">出口 / 类型</th><th style="min-width:320px;">操作</th></tr></thead>
               <tbody id="configNodesTableBody"></tbody>
             </table>
           </div>
@@ -1157,6 +1290,38 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
               <button class="btn" onclick="jumpConfigNodesPage()">跳转</button>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- Subscriptions Tab -->
+      <div id="subscriptionsTab" class="tab-content">
+        <div style="display:flex; justify-content:space-between; margin-bottom: 20px;">
+          <div>
+            <h2 style="font-size: 18px; margin-bottom: 4px;">订阅管理</h2>
+            <p style="color: var(--text-muted); font-size: 12px;">每个订阅独立保存、独立刷新、独立统计节点数</p>
+          </div>
+          <div style="display:flex; gap: 10px; align-items:center; flex-wrap:wrap;">
+            <button class="btn btn-primary" onclick="showAddSubscriptionModal()"><svg class="svg-icon" aria-hidden="true"><use href="#i-plus"></use></svg>添加订阅</button>
+            <button class="btn" onclick="refreshSubscription()"><svg class="svg-icon" aria-hidden="true"><use href="#i-refresh"></use></svg>立即拉取全部</button>
+          </div>
+        </div>
+
+        <div class="panel subscriptions-panel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">订阅 / API / GitHub Raw 定时拉取</div>
+              <div id="manageSubSummary" style="font-size:12px; color:var(--text-muted); margin-top:4px;">未加载</div>
+            </div>
+            <div id="manageSubStatus" style="font-size:12px; color:var(--text-muted); display:flex; align-items:center;">未加载</div>
+          </div>
+          <div class="table-container subscriptions-table-wrap">
+            <table class="subscriptions-table">
+              <thead><tr><th>名称</th><th>URL</th><th>状态</th><th>间隔</th><th>上次刷新</th><th>节点数</th><th>错误</th><th>操作</th></tr></thead>
+              <tbody id="manageSubTableBody"></tbody>
+            </table>
+          </div>
+          <div class="subscription-card-list" id="manageSubCardList"></div>
+          <div style="font-size: 11px; color: var(--success); margin: 12px 16px 16px;">返回内容支持 Base64、纯文本节点列表或 Clash YAML。</div>
         </div>
       </div>
 
@@ -1202,9 +1367,9 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
                 </select>
               </label>
               <div style="display:flex; align-items:center; gap:8px;">
-                <button id="debugNodesPrevBtn" class="btn btn-sm" onclick="changeDebugNodesPage(-1)">上一页</button>
+                <button id="debugNodesPrevBtn" class="btn" onclick="changeDebugNodesPage(-1)">上一页</button>
                 <span id="debugNodesPageText">第 1 / 1 页</span>
-                <button id="debugNodesNextBtn" class="btn btn-sm" onclick="changeDebugNodesPage(1)">下一页</button>
+                <button id="debugNodesNextBtn" class="btn" onclick="changeDebugNodesPage(1)">下一页</button>
               </div>
             </div>
           </div>
@@ -1232,7 +1397,7 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
             <div class="panel-title">控制台日志 (Console Logs)</div>
             <div style="display:flex; align-items:center; gap:12px;">
               <label style="font-size:13px; color:var(--text-muted); display:flex; align-items:center; gap:6px;"><input type="checkbox" id="autoScrollLogs" checked> 自动滚动</label>
-              <button class="btn btn-sm" onclick="pollLogs()"><svg class="svg-icon sm" aria-hidden="true"><use href="#i-refresh"></use></svg>刷新</button>
+              <button class="btn" onclick="pollLogs()"><svg class="svg-icon sm" aria-hidden="true"><use href="#i-refresh"></use></svg>刷新</button>
             </div>
           </div>
           <div style="padding: 0;">
@@ -1414,26 +1579,13 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
             <div class="panel" style="margin-bottom: 16px;">
               <div class="panel-header"><div class="panel-title">订阅配置</div></div>
               <div style="padding: 16px;">
-                <div class="checkbox-grid">
-                  <div class="checkbox-row"><input type="checkbox" id="settingSubEnabled" /><label for="settingSubEnabled">启用订阅自动刷新</label></div>
+                <div style="font-size: 12px; color: var(--text-muted); line-height: 1.7;">
+                  订阅现在完全独立存储在 SQLite 中，支持：
+                  <br />• 每个订阅单独启用 / 停用
+                  <br />• 每个订阅单独刷新间隔
+                  <br />• 查看每个订阅节点数、上次刷新时间、最近错误
+                  <br />请前往 <strong>订阅管理</strong> 页面维护。
                 </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-                  <div class="form-group">
-                    <label>刷新间隔</label>
-                    <select id="settingSubInterval" class="setting-input">
-                      <option value="10m">10 分钟</option><option value="30m">30 分钟</option>
-                      <option value="1h">1 小时</option><option value="3h">3 小时</option>
-                      <option value="6h">6 小时</option><option value="12h">12 小时</option>
-                      <option value="24h">24 小时</option>
-                    </select>
-                  </div>
-                </div>
-                <div class="form-group" style="margin-top: 12px;">
-                  <label>订阅 / API / GitHub Raw URL (每行一个)</label>
-                  <textarea id="settingSubURLs" rows="4" class="setting-input" placeholder="https://api.example.com/proxies
-https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertical; font-size:12px;"></textarea>
-                </div>
-                <div style="font-size: 11px; color: var(--success); margin-top: 8px;">订阅/API/GitHub Raw URL 返回 Base64、纯文本节点列表或 Clash YAML，保存后立即拉取并生效</div>
               </div>
             </div>
 
@@ -1541,6 +1693,98 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
     </div>
   </div>
 
+  <!-- Subscription Edit Modal -->
+  <div class="modal-overlay" id="subscriptionModalOverlay">
+    <div class="modal">
+      <div class="modal-header" id="subscriptionModalTitle">添加订阅</div>
+      <div class="modal-body">
+        <input type="hidden" id="manageSubId" />
+        <div class="form-group">
+          <label>订阅名称</label>
+          <input id="manageSubName" class="setting-input" placeholder="例如：HK 主订阅" />
+        </div>
+        <div class="form-group">
+          <label>订阅 URL</label>
+          <input id="manageSubURL" class="setting-input" placeholder="https://example.com/subscription" />
+        </div>
+        <div style="display:grid; grid-template-columns: 1fr 160px; gap:12px;">
+          <div class="form-group">
+            <label>刷新间隔</label>
+            <select id="manageSubInterval" class="setting-input">
+              <option value="10m">10 分钟</option><option value="30m">30 分钟</option>
+              <option value="1h">1 小时</option><option value="3h">3 小时</option>
+              <option value="6h">6 小时</option><option value="12h">12 小时</option>
+              <option value="24h">24 小时</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>&nbsp;</label>
+            <div class="checkbox-row"><input type="checkbox" id="manageSubEnabled" checked /><label for="manageSubEnabled">启用</label></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn" onclick="hideSubscriptionModal()">取消</button>
+        <button type="button" class="btn btn-primary" onclick="saveManageSubscription()">保存订阅</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Subscription Nodes Modal -->
+  <div class="modal-overlay" id="subscriptionNodesModalOverlay">
+    <div class="modal modal-xwide">
+      <div class="modal-header" id="subscriptionNodesModalTitle">订阅节点</div>
+      <div class="modal-body" style="gap:12px; max-height:70vh; overflow:auto;">
+        <div class="toolbar-row" style="padding:0; border-bottom:none;">
+          <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <input type="text" id="subscriptionNodeKeyword" class="setting-input" placeholder="搜索名称 / 地址" style="width:220px;" />
+            <input type="text" id="subscriptionNodeRegionFilter" class="setting-input" placeholder="地域，如 US / JP / TW" style="width:170px;" />
+            <select id="subscriptionNodeStatusFilter" class="setting-input" style="width:140px;">
+              <option value="all">全部状态</option>
+              <option value="healthy">仅有效</option>
+              <option value="unhealthy">仅失效</option>
+              <option value="unknown">未检测</option>
+            </select>
+            <select id="subscriptionNodePageSize" class="setting-input" style="width:110px;">
+              <option value="10">10 / 页</option>
+              <option value="20" selected>20 / 页</option>
+              <option value="50">50 / 页</option>
+              <option value="100">100 / 页</option>
+            </select>
+            <button class="btn" onclick="searchSubscriptionNodes()"><svg class="svg-icon" aria-hidden="true"><use href="#i-search"></use></svg>搜索</button>
+            <button class="btn" onclick="resetSubscriptionNodeFilters()"><svg class="svg-icon" aria-hidden="true"><use href="#i-refresh"></use></svg>重置</button>
+          </div>
+        </div>
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+          <div id="subscriptionNodesSummary" style="font-size:12px; color:var(--text-muted);">未加载</div>
+          <div id="subscriptionNodesLoading" style="display:none; font-size:12px; color:var(--primary);">加载中...</div>
+        </div>
+        <div class="table-container">
+          <table style="min-width:860px;">
+            <thead>
+              <tr>
+                <th style="min-width:220px;">名称</th>
+                <th style="min-width:110px;">地域</th>
+                <th style="min-width:92px;">状态</th>
+                <th style="min-width:84px;">延迟</th>
+                <th style="min-width:220px;">出口 / 类型</th>
+                <th style="min-width:72px;">失败</th>
+              </tr>
+            </thead>
+            <tbody id="subscriptionNodesTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer" style="justify-content:space-between;">
+        <div style="display:flex; gap:8px; align-items:center; color:var(--text-muted); font-size:12px;">
+          <button type="button" class="btn" id="subscriptionNodesPrevBtn" onclick="changeSubscriptionNodesPage(-1)">上一页</button>
+          <span id="subscriptionNodesPageText">第 1 / 1 页</span>
+          <button type="button" class="btn" id="subscriptionNodesNextBtn" onclick="changeSubscriptionNodesPage(1)">下一页</button>
+        </div>
+        <button type="button" class="btn" onclick="hideSubscriptionNodesModal()">关闭</button>
+      </div>
+    </div>
+  </div>
 
 
   <div class="toast-container" id="toastContainer"></div>
@@ -1566,6 +1810,11 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
     let dashboardFastestNodes = [];
     let dashboardRegionStats = {};
     let dashboardRegionHealthy = {};
+    let dashboardRegionEntries = [];
+    let dashboardLatencyHistogram = [];
+    let poolTrendTime = [];
+    let poolTrendTotal = [];
+    let poolTrendHealthy = [];
     let monitorNodesPage = 1;
     let monitorNodesPageSize = 20;
     let monitorNodesTotalPages = 1;
@@ -1584,8 +1833,14 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
     let configNodesSource = 'all';
     let configNodesStatus = 'all';
     let configNodesRegion = '';
+    let floatingActionMenu = null;
+    let floatingActionMenuOwner = null;
+    let subscriptionNodesSubId = 0;
+    let subscriptionNodesSubName = '';
+    let subscriptionNodesPage = 1;
+    let subscriptionNodesTotalPages = 1;
+    let subscriptionNodesPageSize = 20;
     let nodeInputMode = 'single';
-    let _savedSubSnapshot = '';
     let _savedCoreSnapshot = '';
 
     function showFullscreenLoading(text, subtext) {
@@ -1604,6 +1859,8 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
     let successRateChartInst = null;
     let failureChartInst = null;
     let trafficChartInst = null;
+    let latencyDistChartInst = null;
+    let poolTrendChartInst = null;
     let trafficSource = null;
     let trafficDataUp = [];
     let trafficDataDown = [];
@@ -1616,6 +1873,8 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
       successRateChartInst && successRateChartInst.resize();
       failureChartInst && failureChartInst.resize();
       trafficChartInst && trafficChartInst.resize();
+      latencyDistChartInst && latencyDistChartInst.resize();
+      poolTrendChartInst && poolTrendChartInst.resize();
     });
 
     const REGION_ICON_COLORS = {
@@ -1697,7 +1956,8 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
       if (name === 'dashboard') {
         setTimeout(updateDashboardCharts, 100);
       }
-      if (name === 'manage') { loadConfigNodes(); loadManageSubscriptionConfig(); }
+      if (name === 'manage') { loadConfigNodes(); }
+      if (name === 'subscriptions') { loadManageSubscriptionConfig(); }
       if (name === 'debug') {
         loadDebugData();
         setTimeout(updateDebugCharts, 100);
@@ -1717,7 +1977,7 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
       document.body.classList.toggle('sidebar-collapsed', !!collapsed);
       localStorage.setItem('sidebarCollapsed', collapsed ? '1' : '0');
       const title = collapsed ? '展开侧边栏' : '收起侧边栏';
-      document.querySelectorAll('#sidebarToggleBtn, .brand-toggle').forEach(btn => {
+      document.querySelectorAll('#sidebarToggleBtn').forEach(btn => {
         btn.title = title;
         btn.setAttribute('aria-label', title);
       });
@@ -1753,6 +2013,23 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
       return escapeHtml(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
+    let autoRefreshTimer = null;
+    const AUTO_REFRESH_INTERVAL_MS = 5000;
+
+    function startAutoRefresh() {
+      if (autoRefreshTimer) return;
+      autoRefreshTimer = setInterval(() => {
+        if (document.hidden) return;
+        refresh();
+      }, AUTO_REFRESH_INTERVAL_MS);
+    }
+
+    function stopAutoRefresh() {
+      if (!autoRefreshTimer) return;
+      clearInterval(autoRefreshTimer);
+      autoRefreshTimer = null;
+    }
+
     async function refresh() {
       try {
         monitorNodesPageSize = parseInt(document.getElementById('monitorNodePageSize')?.value || monitorNodesPageSize || 20) || 20;
@@ -1771,18 +2048,26 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
         dashboardFastestNodes = data.fastest_nodes || [];
         dashboardRegionStats = data.region_stats || {};
         dashboardRegionHealthy = data.region_healthy || {};
+        dashboardLatencyHistogram = data.latency_histogram || [];
         updateDashboardStats(data);
+        fetchConnectionStatus(data.active_connections || 0);
         renderNodes(monitorNodesCache);
-        document.getElementById('lastUpdate').textContent = `Sync: ${new Date().toLocaleTimeString()}`;
         fetchSubscriptionStatus();
       } catch(e) {}
     }
 
     function updateDashboardStats(data) {
-      document.getElementById('totalNodes').textContent = data.total_nodes || 0;
-      document.getElementById('healthyNodes').textContent = data.healthy_nodes || 0;
+      const total = data.total_nodes || 0;
+      const healthy = data.healthy_nodes || 0;
+      const healthRate = total > 0 ? (healthy * 100 / total) : 0;
+      document.getElementById('totalNodes').textContent = total.toLocaleString();
+      document.getElementById('totalSummary').textContent = `当前筛选 ${monitorNodesFilteredTotal.toLocaleString()} 条`;
+      document.getElementById('healthRate').textContent = healthRate.toFixed(1) + '%';
+      document.getElementById('healthSummary').textContent = `健康 ${healthy.toLocaleString()} / 总计 ${total.toLocaleString()}`;
       document.getElementById('activeConnections').textContent = data.active_connections || 0;
-      document.getElementById('blacklistedNodes').textContent = data.blacklisted_nodes || 0;
+      document.getElementById('uniqueExitIPs').textContent = (data.unique_exit_ips || 0).toLocaleString();
+      document.getElementById('blacklistedNodes').textContent = (data.blacklisted_nodes || 0).toLocaleString();
+      pushPoolTrend(total, healthy);
       document.getElementById('monitorPageInfo').textContent = `第 ${monitorNodesPage} / ${Math.max(monitorNodesTotalPages, 1)} 页`;
       document.getElementById('monitorTotalInfo').textContent = `当前筛选共 ${monitorNodesFilteredTotal} 条`;
       document.getElementById('monitorPrevBtn').disabled = monitorNodesPage <= 1;
@@ -1793,6 +2078,29 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
       }
     }
 
+
+    function pushPoolTrend(total, healthy) {
+      const now = new Date().toLocaleTimeString([], {hour12: false});
+      if (poolTrendTime[poolTrendTime.length - 1] === now) return;
+      poolTrendTime.push(now);
+      poolTrendTotal.push(total || 0);
+      poolTrendHealthy.push(healthy || 0);
+      if (poolTrendTime.length > 60) { poolTrendTime.shift(); poolTrendTotal.shift(); poolTrendHealthy.shift(); }
+    }
+
+    async function fetchConnectionStatus(fallbackActive = 0) {
+      try {
+        const res = await fetch('/api/connections/status');
+        if (!res.ok) throw new Error('status ' + res.status);
+        const d = await res.json();
+        if (d.error) throw new Error(d.error);
+        const active = Number(d.active ?? fallbackActive ?? 0);
+        document.getElementById('activeConnections').textContent = active.toLocaleString();
+        document.getElementById('connectionBreakdown').textContent = `入站 ${Number(d.inbound || active).toLocaleString()} · 出站 ${Number(d.outbound_routes || 0).toLocaleString()}`;
+      } catch (e) {
+        document.getElementById('connectionBreakdown').textContent = `入站 ${Number(fallbackActive || 0).toLocaleString()} · 出站 -`;
+      }
+    }
     function initEchart(id) {
       const el = document.getElementById(id);
       if(!el) return null;
@@ -1803,9 +2111,54 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
 
     function getCssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
+    function getRegionRateClass(rate) {
+      if (rate >= 80) return 'rate-good';
+      if (rate >= 40) return 'rate-mid';
+      return 'rate-bad';
+    }
+
+    function renderRegionDetails() {
+      const cards = document.getElementById('regionCardsGrid');
+      const tbody = document.getElementById('regionDetailsTableBody');
+      if (!cards || !tbody) return;
+
+      cards.innerHTML = dashboardRegionEntries.map(item => {
+        const rate = Number(item.rate || 0).toFixed(1);
+        return `
+          <div class="region-card">
+            <div>
+              <div class="region-card-top">
+                <div class="region-card-code">${regionSvg(item.code)} <span>${escapeHtml(item.code)}</span></div>
+                <div class="region-card-count">${item.total}</div>
+              </div>
+              <div class="region-card-meta">
+                <span>可用 ${item.healthy}</span>
+                <span>不可用 ${item.unavailable}</span>
+              </div>
+            </div>
+            <div class="region-card-rate ${getRegionRateClass(item.rate)}">连通率 ${rate}%</div>
+          </div>
+        `;
+      }).join('');
+
+      tbody.innerHTML = dashboardRegionEntries.map(item => {
+        const rate = Number(item.rate || 0).toFixed(1);
+        return `
+          <tr>
+            <td><strong>${escapeHtml(item.code)}</strong></td>
+            <td class="num">${item.total}</td>
+            <td class="num">${item.healthy}</td>
+            <td class="num">${item.unavailable}</td>
+            <td class="num ${getRegionRateClass(item.rate)}">${rate}%</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
     function updateDashboardCharts() {
-      if(!regionChartInst) regionChartInst = initEchart('regionChart');
       if(!latencyChartInst) latencyChartInst = initEchart('latencyChart');
+      if(!latencyDistChartInst) latencyDistChartInst = initEchart('latencyDistChart');
+      if(!poolTrendChartInst) poolTrendChartInst = initEchart('poolTrendChart');
 
       const regionStats = {};
       Object.keys(dashboardRegionStats || {}).forEach(k => {
@@ -1816,30 +2169,17 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
       });
       if (Object.keys(regionStats).length === 0) return;
       
-      const regionData = Object.keys(regionStats).map(k => ({
-        name: k,
-        value: regionStats[k].total,
-        itemStyle: { color: regionStats[k].healthy === 0 ? '#ef4444' : (regionStats[k].healthy < regionStats[k].total ? '#f59e0b' : '#3b82f6') }
-      }));
-
-      regionChartInst && regionChartInst.setOption({
-        backgroundColor: 'transparent',
-        tooltip: { trigger: 'item',
-          backgroundColor: getCssVar('--bg-panel'), borderColor: getCssVar('--border'), textStyle: { color: getCssVar('--text-main') },
-          formatter: (params) => {
-             const stat = regionStats[params.name];
-             return `${params.name} Region<br/>Total Node: ${stat.total}<br/>Available: ${stat.healthy}`;
-          }
-        },
-        legend: { top: 'bottom', textStyle: { color: getCssVar('--text-muted') } },
-        series: [{
-          name: 'Regions', type: 'pie', radius: ['40%', '70%'], center: ['50%', '55%'],
-          itemStyle: { borderRadius: 10, borderColor: getCssVar('--bg-panel'), borderWidth: 2 },
-          label: { show: false, position: 'center' },
-          emphasis: { label: { show: true, fontSize: '20', fontWeight: 'bold', color: getCssVar('--text-main') } },
-          data: regionData
-        }]
-      });
+      const regionEntries = Object.keys(regionStats)
+        .map(k => {
+          const total = regionStats[k].total || 0;
+          const healthy = regionStats[k].healthy || 0;
+          const unavailable = Math.max(total - healthy, 0);
+          const rate = total > 0 ? (healthy / total) * 100 : 0;
+          return { code: k, total, healthy, unavailable, rate };
+        })
+        .sort((a, b) => b.total - a.total || b.rate - a.rate || a.code.localeCompare(b.code));
+      dashboardRegionEntries = regionEntries;
+      renderRegionDetails();
 
       // 2. Latency Chart Data
       const sorted = dashboardFastestNodes || [];
@@ -1849,11 +2189,11 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
       latencyChartInst && latencyChartInst.setOption({
         backgroundColor: 'transparent',
         tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, backgroundColor: getCssVar('--bg-panel'), borderColor: getCssVar('--border'), textStyle: { color: getCssVar('--text-main') } },
-        grid: { left: '3%', right: '4%', bottom: '5%', top: '25%', containLabel: true },
+        grid: { left: '3%', right: '4%', bottom: '6%', top: '12%', containLabel: true },
         xAxis: { type: 'value', splitLine: { lineStyle: { color: getCssVar('--border'), type: 'dashed' } }, axisLabel: { color: getCssVar('--text-muted'), formatter: '{value} ms' } },
-        yAxis: { type: 'category', data: latencyX.reverse(), axisLabel: { color: getCssVar('--text-muted'), width: 90, overflow: 'truncate' } },
+        yAxis: { type: 'category', data: latencyX.reverse(), axisLabel: { color: getCssVar('--text-muted'), width: 180, overflow: 'truncate', interval: 0, margin: 14, fontSize: 12 }, axisTick: { show: false } },
         series: [{
-          name: 'Latency', type: 'bar', data: latencyY.reverse(),
+          name: 'Latency', type: 'bar', data: latencyY.reverse(), barMaxWidth: 12, barCategoryGap: '100%',
           itemStyle: {
             color: new echarts.graphic.LinearGradient(1, 0, 0, 0, [
               { offset: 0, color: '#10b981' },
@@ -1862,6 +2202,32 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
             borderRadius: [0, 4, 4, 0]
           }
         }]
+      });
+
+
+      const hist = dashboardLatencyHistogram || [];
+      const histLabels = hist.map(x => x.label);
+      const histCounts = hist.map(x => x.count || 0);
+      latencyDistChartInst && latencyDistChartInst.setOption({
+        backgroundColor: 'transparent',
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, backgroundColor: getCssVar('--bg-panel'), borderColor: getCssVar('--border'), textStyle: { color: getCssVar('--text-main') } },
+        grid: { left: '4%', right: '4%', bottom: '10%', top: '15%', containLabel: true },
+        xAxis: { type: 'category', data: histLabels, axisLabel: { color: getCssVar('--text-muted') }, axisTick: { show: false } },
+        yAxis: { type: 'value', splitLine: { lineStyle: { color: getCssVar('--border'), type: 'dashed' } }, axisLabel: { color: getCssVar('--text-muted') } },
+        series: [{ name: '节点数', type: 'bar', data: histCounts, barMaxWidth: 38, itemStyle: { color: '#60a5fa', borderRadius: [4, 4, 0, 0] } }]
+      });
+
+      poolTrendChartInst && poolTrendChartInst.setOption({
+        backgroundColor: 'transparent',
+        tooltip: { trigger: 'axis', backgroundColor: getCssVar('--bg-panel'), borderColor: getCssVar('--border'), textStyle: { color: getCssVar('--text-main') } },
+        legend: { top: 'bottom', textStyle: { color: getCssVar('--text-muted') } },
+        grid: { left: '4%', right: '4%', bottom: '15%', top: '15%', containLabel: true },
+        xAxis: { type: 'category', boundaryGap: false, data: poolTrendTime, axisLine: { lineStyle: { color: getCssVar('--border') } }, axisLabel: { color: getCssVar('--text-muted') } },
+        yAxis: { type: 'value', splitLine: { lineStyle: { color: getCssVar('--border'), type: 'dashed' } }, axisLabel: { color: getCssVar('--text-muted'), formatter: compactNumber } },
+        series: [
+          { name: '总节点', type: 'line', smooth: true, symbol: 'none', lineStyle: { width: 2, color: '#60a5fa' }, data: poolTrendTotal },
+          { name: '健康节点', type: 'line', smooth: true, symbol: 'none', lineStyle: { width: 2, color: '#10b981' }, data: poolTrendHealthy }
+        ]
       });
 
       // 3. Traffic Chart
@@ -1885,6 +2251,13 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
         });
         connectTrafficSSE(); // connect SSE on init
       }
+    }
+
+    function compactNumber(value) {
+      const n = Number(value || 0);
+      if (Math.abs(n) >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+      if (Math.abs(n) >= 1000) return (n / 1000).toFixed(1) + 'K';
+      return String(n);
     }
 
     function formatBytes(bytes, decimals = 2) {
@@ -1917,6 +2290,7 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
           // Update live speed stat panels
           document.getElementById('liveUpSpeed').textContent = formatBytes(up) + '/s';
           document.getElementById('liveDownSpeed').textContent = formatBytes(down) + '/s';
+          document.getElementById('liveThroughput').textContent = formatBytes(up + down) + '/s';
           
           if(trafficChartInst) {
             trafficChartInst.setOption({ xAxis: { data: trafficTime }, series: [{ data: trafficDataUp }, { data: trafficDataDown }] });
@@ -2152,7 +2526,7 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
     }
 
     function setIntervalSelectValue(selectEl, interval) {
-      const iv = interval || '';
+      const iv = String(interval || '');
       let matched = false;
       for (let opt of selectEl.options) {
         if (iv === opt.value || iv === opt.value.replace('m','m0s') || iv.startsWith(opt.value)) {
@@ -2162,50 +2536,307 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
       if (!matched) selectEl.value = '1h';
     }
 
-    function toggleManageSubPanel(force) {
-      const body = document.getElementById('manageSubPanelBody');
-      const toggle = document.getElementById('manageSubToggle');
-      const text = document.getElementById('manageSubToggleText');
-      const shouldShow = typeof force === 'boolean' ? force : !body.classList.contains('show');
-      body.classList.toggle('show', shouldShow);
-      toggle.classList.toggle('expanded', shouldShow);
-      text.textContent = shouldShow ? '收起' : '展开';
+    function showSubscriptionModal() {
+      document.getElementById('subscriptionModalOverlay').classList.add('show');
+    }
+
+    function hideSubscriptionModal() {
+      document.getElementById('subscriptionModalOverlay').classList.remove('show');
+    }
+
+    function showAddSubscriptionModal() {
+      resetManageSubscriptionForm();
+      document.getElementById('subscriptionModalTitle').textContent = '添加订阅';
+      showSubscriptionModal();
+    }
+
+    function resetManageSubscriptionForm() {
+      document.getElementById('manageSubId').value = '';
+      document.getElementById('manageSubName').value = '';
+      document.getElementById('manageSubURL').value = '';
+      document.getElementById('manageSubEnabled').checked = true;
+      setIntervalSelectValue(document.getElementById('manageSubInterval'), '1h');
+    }
+
+    function fillManageSubscriptionForm(sub) {
+      document.getElementById('subscriptionModalTitle').textContent = '编辑订阅';
+      document.getElementById('manageSubId').value = sub.id || '';
+      document.getElementById('manageSubName').value = sub.name || '';
+      document.getElementById('manageSubURL').value = sub.url || '';
+      document.getElementById('manageSubEnabled').checked = !!sub.enabled;
+      setIntervalSelectValue(document.getElementById('manageSubInterval'), sub.refresh_interval || '1h');
+      showSubscriptionModal();
+    }
+
+    function fmtDateTime(v) {
+      if (!v) return '-';
+      const d = new Date(v);
+      if (Number.isNaN(d.getTime())) return v;
+      return d.toLocaleString();
+    }
+
+    function fmtDuration(v) {
+      if (v === null || v === undefined || v === '') return '-';
+      if (typeof v === 'string') return v;
+      const ns = Number(v);
+      if (!Number.isFinite(ns) || ns <= 0) return '-';
+      const totalSeconds = Math.floor(ns / 1e9);
+      if (totalSeconds % 86400 === 0) return `${totalSeconds / 86400}天`;
+      if (totalSeconds % 3600 === 0) return `${totalSeconds / 3600}小时`;
+      if (totalSeconds % 60 === 0) return `${totalSeconds / 60}分钟`;
+      return `${totalSeconds}秒`;
+    }
+
+    function toggleInlineActionMenu(btn, event) {
+      if (event) event.stopPropagation();
+      const wrap = btn.closest('.action-dropdown');
+      const willOpen = !wrap?.classList.contains('open');
+      closeConfigActionMenus();
+      if (wrap && willOpen) wrap.classList.add('open');
     }
 
     async function loadManageSubscriptionConfig() {
       try {
-        const res = await fetch('/api/subscription/config');
-        if (!res.ok) return;
-        const d = await res.json();
-        document.getElementById('manageSubEnabled').checked = d.enabled || false;
-        setIntervalSelectValue(document.getElementById('manageSubInterval'), d.interval || '1h');
-        document.getElementById('manageSubURLs').value = (d.subscriptions || []).join('\n');
-        document.getElementById('manageSubStatus').textContent = d.enabled ? `定时拉取已开启，间隔 ${document.getElementById('manageSubInterval').value}` : '定时拉取未开启，保存后仍会立即拉取一次';
-        const count = (d.subscriptions || []).filter(Boolean).length;
-        document.getElementById('manageSubSummary').textContent = count > 0 ? `${count} 条 URL · ${d.enabled ? '已启用' : '未启用'} · 间隔 ${document.getElementById('manageSubInterval').value}` : '未配置拉取 URL';
-      } catch(e) { console.error('Failed to load subscription config:', e); }
+        const [listRes, statusRes] = await Promise.all([
+          fetch('/api/subscriptions'),
+          fetch('/api/subscription/status'),
+        ]);
+        const listData = listRes.ok ? await listRes.json() : {subscriptions: []};
+        const statusData = statusRes.ok ? await statusRes.json() : {};
+        const subs = listData.subscriptions || [];
+        const body = document.getElementById('manageSubTableBody');
+        const cards = document.getElementById('manageSubCardList');
+        const actionButtons = (sub) => `
+          <button class="btn js-view-sub-nodes" data-id="${sub.id}" data-name="${escapeAttr(sub.name || '')}">节点</button>
+          <div class="action-dropdown">
+            <button class="btn" onclick="toggleInlineActionMenu(this, event)">${buttonIcon('more')}更多</button>
+            <div class="action-menu">
+              <button class="btn js-edit-sub" data-sub="${escapeAttr(JSON.stringify(sub))}">${buttonIcon('edit')}编辑</button>
+              <button class="btn" onclick="closeConfigActionMenus(); refreshSubscriptionById(${sub.id})">${buttonIcon('refresh')}刷新</button>
+              <button class="btn btn-danger" onclick="closeConfigActionMenus(); deleteSubscriptionById(${sub.id})">${buttonIcon('trash')}删除</button>
+            </div>
+          </div>
+        `;
+        body.innerHTML = subs.length ? subs.map(sub => `
+          <tr>
+            <td><strong>${escapeHtml(sub.name || '-')}</strong></td>
+            <td><span class="subscription-url-text" title="${escapeAttr(sub.url || '-')}">${escapeHtml(sub.url || '-')}</span></td>
+            <td><span class="badge ${sub.enabled ? 'badge-healthy' : 'badge-warning'}">${sub.enabled ? '启用' : '停用'}</span></td>
+            <td><span class="tt-mono">${escapeHtml(fmtDuration(sub.refresh_interval))}</span></td>
+            <td><span class="tt-mono">${escapeHtml(fmtDateTime(sub.last_refresh))}</span></td>
+            <td><span class="tt-mono">${sub.last_node_count || 0}</span></td>
+            <td><span class="subscription-error-cell" title="${escapeAttr(sub.last_error || '-') }" style="color:${sub.last_error ? 'var(--error)' : 'var(--text-muted)'};">${escapeHtml(sub.last_error || '-')}</span></td>
+            <td><div class="subscription-actions">${actionButtons(sub)}</div></td>
+          </tr>
+        `).join('') : '<tr><td colspan="8" style="text-align:center; color:var(--text-muted);">暂无订阅</td></tr>';
+        cards.innerHTML = subs.length ? subs.map(sub => `
+          <div class="subscription-card">
+            <div class="subscription-card-head">
+              <strong>${escapeHtml(sub.name || '-')}</strong>
+              <span class="badge ${sub.enabled ? 'badge-healthy' : 'badge-warning'}">${sub.enabled ? '启用' : '停用'}</span>
+            </div>
+            <div class="subscription-card-url" title="${escapeAttr(sub.url || '-')}">${escapeHtml(sub.url || '-')}</div>
+            <div class="subscription-card-meta" style="font-size:12px; color:var(--text-muted);">
+              <span>间隔 ${escapeHtml(fmtDuration(sub.refresh_interval))}</span>
+              <span>节点 ${sub.last_node_count || 0}</span>
+              <span>上次 ${escapeHtml(fmtDateTime(sub.last_refresh))}</span>
+            </div>
+            ${sub.last_error ? `<div style="font-size:12px; color:var(--error);">${escapeHtml(sub.last_error)}</div>` : ''}
+            <div class="subscription-card-actions subscription-actions" style="justify-content:flex-start;">${actionButtons(sub)}</div>
+          </div>
+        `).join('') : '<div style="text-align:center; color:var(--text-muted); padding:20px;">暂无订阅</div>';
+        document.querySelectorAll('.js-view-sub-nodes').forEach(btn => {
+          btn.onclick = () => showSubscriptionNodes(Number(btn.dataset.id || 0), btn.dataset.name || '');
+        });
+        document.querySelectorAll('.js-edit-sub').forEach(btn => {
+          btn.onclick = () => { closeConfigActionMenus(); fillManageSubscriptionForm(JSON.parse(btn.dataset.sub || '{}')); };
+        });
+        document.getElementById('manageSubStatus').textContent = statusData.is_refreshing ? '订阅刷新中...' : (statusData.last_error ? `最近错误：${statusData.last_error}` : '订阅状态正常');
+        const enabledCount = subs.filter(s => s.enabled).length;
+        document.getElementById('manageSubSummary').textContent = subs.length ? `${subs.length} 个订阅 · ${enabledCount} 个启用 · 当前订阅节点 ${statusData.node_count || 0}` : '未配置订阅';
+      } catch(e) {
+        console.error('Failed to load subscriptions:', e);
+      }
     }
 
-    async function saveManageSubscriptionConfig() {
-      const urls = document.getElementById('manageSubURLs').value.split('\n').map(s => s.trim()).filter(Boolean);
-      const enabled = document.getElementById('manageSubEnabled').checked;
-      const interval = document.getElementById('manageSubInterval').value;
-      showFullscreenLoading('更新订阅/API/GitHub Raw...', '正在拉取并重载节点，请稍候');
+
+    function hideSubscriptionNodesModal() {
+      document.getElementById('subscriptionNodesModalOverlay').classList.remove('show');
+    }
+
+    async function showSubscriptionNodes(id, name) {
+      subscriptionNodesSubId = id;
+      subscriptionNodesSubName = name || `订阅 #${id}`;
+      subscriptionNodesPage = 1;
+      document.getElementById('subscriptionNodeKeyword').value = '';
+      document.getElementById('subscriptionNodeRegionFilter').value = '';
+      document.getElementById('subscriptionNodeStatusFilter').value = 'all';
+      document.getElementById('subscriptionNodePageSize').value = String(subscriptionNodesPageSize);
+      document.getElementById('subscriptionNodesModalTitle').textContent = `订阅节点：${subscriptionNodesSubName || id}`;
+      document.getElementById('subscriptionNodesSummary').textContent = '加载中...';
+      document.getElementById('subscriptionNodesTableBody').innerHTML = '';
+      document.getElementById('subscriptionNodesModalOverlay').classList.add('show');
+      await loadSubscriptionNodes(1, true);
+    }
+
+    async function loadSubscriptionNodes(page = subscriptionNodesPage, initial = false) {
+      if (!subscriptionNodesSubId) return;
+      subscriptionNodesPage = page || 1;
+      const body = document.getElementById('subscriptionNodesTableBody');
+      const loading = document.getElementById('subscriptionNodesLoading');
+      if (initial) {
+        body.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">加载中...</td></tr>';
+      } else {
+        loading.style.display = 'block';
+      }
       try {
-        const res = await fetch('/api/subscription/config', {
-          method:'PUT', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({subscriptions: urls, enabled, interval})
+        subscriptionNodesPageSize = parseInt(document.getElementById('subscriptionNodePageSize')?.value || subscriptionNodesPageSize || 20) || 20;
+        const qs = new URLSearchParams({
+          page: String(subscriptionNodesPage),
+          page_size: String(subscriptionNodesPageSize),
+          keyword: (document.getElementById('subscriptionNodeKeyword')?.value || '').trim(),
+          region: (document.getElementById('subscriptionNodeRegionFilter')?.value || '').trim(),
+          status: document.getElementById('subscriptionNodeStatusFilter')?.value || 'all'
         });
-        const d = await res.json();
+        const res = await fetch(`/api/subscriptions/${subscriptionNodesSubId}/nodes?${qs.toString()}`);
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          if (initial) body.innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--error);">${escapeHtml(data.error || '加载失败')}</td></tr>`;
+          else showToast(data.error || '加载失败', 'error');
+          return;
+        }
+        const nodes = data.nodes || [];
+        subscriptionNodesPage = data.page || 1;
+        subscriptionNodesTotalPages = data.total_pages || 1;
+        const hasFilter = qs.get('keyword') || qs.get('region') || qs.get('status') !== 'all';
+        document.getElementById('subscriptionNodesSummary').textContent = `${hasFilter ? '当前筛选 ' : '共 '}${Number(data.total || 0).toLocaleString()} 个节点，只显示节点摘要，不展示完整 URI`;
+        body.innerHTML = nodes.length ? nodes.map(n => `
+          <tr>
+            <td>
+              <div style="font-weight:500">${escapeHtml(n.name || '-')}</div>
+              <div style="font-size:11px; color:var(--text-muted)">${escapeHtml(n.runtime?.tag || '')}</div>
+            </td>
+            <td>${renderConfigNodeRegion(n)}</td>
+            <td>${renderConfigNodeStatus(n)}</td>
+            <td class="tt-mono">${renderConfigNodeLatency(n)}</td>
+            <td>${renderQualityInfo({
+              proxy_type: n.runtime?.proxy_type,
+              exit_ip: n.runtime?.exit_ip,
+              ip_valid: n.runtime?.ip_valid,
+              quality_error: n.runtime?.quality_error,
+              asn: n.runtime?.asn,
+              isp: n.runtime?.isp,
+              ip_invalid_reason: n.runtime?.ip_invalid_reason
+            })}</td>
+            <td class="tt-mono" style="color:${(n.runtime?.failure_count || 0) > 0 ? 'var(--error)' : 'inherit'}">${n.runtime?.failure_count ?? 0}</td>
+          </tr>
+        `).join('') : '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">这个订阅还没有节点，先刷新订阅</td></tr>';
+        document.getElementById('subscriptionNodesPageText').textContent = `第 ${subscriptionNodesPage} / ${Math.max(subscriptionNodesTotalPages, 1)} 页`;
+        document.getElementById('subscriptionNodesPrevBtn').disabled = subscriptionNodesPage <= 1;
+        document.getElementById('subscriptionNodesNextBtn').disabled = subscriptionNodesPage >= Math.max(subscriptionNodesTotalPages, 1);
+      } catch(e) {
+        if (initial) body.innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--error);">加载失败：${escapeHtml(e.message)}</td></tr>`;
+        else showToast('加载失败：' + e.message, 'error');
+      } finally {
+        loading.style.display = 'none';
+      }
+    }
+
+    function searchSubscriptionNodes() {
+      subscriptionNodesPage = 1;
+      loadSubscriptionNodes(1, false);
+    }
+
+    function resetSubscriptionNodeFilters() {
+      document.getElementById('subscriptionNodeKeyword').value = '';
+      document.getElementById('subscriptionNodeRegionFilter').value = '';
+      document.getElementById('subscriptionNodeStatusFilter').value = 'all';
+      document.getElementById('subscriptionNodePageSize').value = '20';
+      subscriptionNodesPageSize = 20;
+      subscriptionNodesPage = 1;
+      loadSubscriptionNodes(1, false);
+    }
+
+    function changeSubscriptionNodesPage(delta) {
+      const nextPage = subscriptionNodesPage + delta;
+      if (nextPage < 1 || nextPage > Math.max(subscriptionNodesTotalPages, 1)) return;
+      loadSubscriptionNodes(nextPage, false);
+    }
+
+    async function saveManageSubscription() {
+      const id = parseInt(document.getElementById('manageSubId').value || '0', 10);
+      const payload = {
+        name: document.getElementById('manageSubName').value.trim(),
+        url: document.getElementById('manageSubURL').value.trim(),
+        enabled: document.getElementById('manageSubEnabled').checked,
+        refresh_interval: document.getElementById('manageSubInterval').value,
+      };
+      if (!payload.url) {
+        showToast('请输入订阅 URL', 'error');
+        return;
+      }
+      showFullscreenLoading(id ? '更新订阅中...' : '创建订阅中...', '正在保存并拉取订阅，请稍候');
+      try {
+        const res = await fetch(id ? `/api/subscriptions/${id}` : '/api/subscriptions', {
+          method: id ? 'PUT' : 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
         hideFullscreenLoading();
-        if (!res.ok || d.error) { showToast(d.error || '保存失败', 'error'); return; }
-        if (d.refresh_error) showToast('配置已保存，但拉取失败: ' + d.refresh_error, 'error');
-        else showToast(`配置已保存，当前节点数: ${d.node_count || 0}`);
-        loadManageSubscriptionConfig();
-        loadConfigNodes();
-        fetchSubscriptionStatus();
+        if (!res.ok || data.error) {
+          showToast(data.error || '保存失败', 'error');
+          return;
+        }
+        showToast(id ? '订阅已更新' : '订阅已创建');
+        hideSubscriptionModal();
+        resetManageSubscriptionForm();
+        await loadManageSubscriptionConfig();
+        await fetchSubscriptionStatus();
+        await loadConfigNodes();
         refresh();
-      } catch(e) { hideFullscreenLoading(); showToast('保存失败: ' + e.message, 'error'); }
+      } catch(e) {
+        hideFullscreenLoading();
+        showToast('保存失败: ' + e.message, 'error');
+      }
+    }
+
+    async function refreshSubscriptionById(id) {
+      showToast('开始刷新订阅...');
+      try {
+        const res = await fetch(`/api/subscriptions/${id}/refresh`, {method:'POST'});
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          showToast(data.error || '刷新失败', 'error');
+          return;
+        }
+        showToast('订阅刷新成功');
+        await loadManageSubscriptionConfig();
+        await loadConfigNodes();
+        refresh();
+      } catch(e) {
+        showToast('刷新失败: ' + e.message, 'error');
+      }
+    }
+
+    async function deleteSubscriptionById(id) {
+      if (!confirm('确认删除这个订阅吗？关联订阅节点也会移除。')) return;
+      try {
+        const res = await fetch(`/api/subscriptions/${id}`, {method:'DELETE'});
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          showToast(data.error || '删除失败', 'error');
+          return;
+        }
+        showToast('订阅已删除');
+        hideSubscriptionModal();
+        resetManageSubscriptionForm();
+        await loadManageSubscriptionConfig();
+        await loadConfigNodes();
+        refresh();
+      } catch(e) {
+        showToast('删除失败: ' + e.message, 'error');
+      }
     }
 
     // Subscriptions
@@ -2217,8 +2848,7 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
         const btn = document.getElementById('refreshSubBtn');
         if(!d.enabled) { btn.style.display='none'; return; }
         btn.style.display='inline-flex';
-        document.getElementById('subscriptionStatus').textContent = `[Sub: ${d.node_count}]`;
-        document.getElementById('subscriptionTrend').textContent = d.is_refreshing ? 'Syncing...' : (d.last_error ? 'ERR' : 'OK');
+        // 首页不再显示订阅状态，这里只控制手动刷新按钮可见性。
       } catch(e){}
     }
     
@@ -2267,7 +2897,6 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
         tbody.innerHTML = configNodes.map((n, i) => `
           <tr>
             <td><strong>${escapeHtml(n.name)}</strong></td>
-            <td class="tt-mono wrap-uri">${escapeHtml(n.uri)}</td>
             <td class="tt-mono">${n.port || '-'}</td>
             <td><span class="badge ${n.source==='subscription'?'badge-warning':'badge-healthy'}">${n.source||'manual'}</span></td>
             <td>${renderConfigNodeRegion(n)}</td>
@@ -2282,9 +2911,9 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
             })}</td>
             <td class="wrap-actions">
               <div class="action-group">
-                ${n.runtime && n.runtime.tag ? `<button class="btn btn-sm config-node-action" data-action="probe" data-tag="${escapeAttr(n.runtime.tag)}" data-name="${escapeAttr(n.name)}">${buttonIcon('zap')}探测</button>` : `<button class="btn btn-sm config-node-action" data-action="reload-needed" data-name="${escapeAttr(n.name)}">${buttonIcon('alert')}需重载</button>`}
-                ${n.runtime && n.runtime.tag ? `<button class="btn btn-sm config-node-action" data-action="quality" data-tag="${escapeAttr(n.runtime.tag)}" data-name="${escapeAttr(n.name)}">${buttonIcon('search')}质量</button>` : `<button class="btn btn-sm config-node-action" data-action="reload-needed" data-name="${escapeAttr(n.name)}">${buttonIcon('alert')}未生效</button>`}
-                <button class="btn btn-sm config-node-action" data-action="edit" data-name="${escapeAttr(n.name)}">${buttonIcon('edit')}编辑</button>
+                ${n.runtime && n.runtime.tag ? `<button class="btn config-node-action" data-action="probe" data-tag="${escapeAttr(n.runtime.tag)}" data-name="${escapeAttr(n.name)}">${buttonIcon('zap')}探测</button>` : `<button class="btn config-node-action" data-action="reload-needed" data-name="${escapeAttr(n.name)}">${buttonIcon('alert')}需重载</button>`}
+                ${n.runtime && n.runtime.tag ? `<button class="btn config-node-action" data-action="quality" data-tag="${escapeAttr(n.runtime.tag)}" data-name="${escapeAttr(n.name)}">${buttonIcon('search')}质量</button>` : `<button class="btn config-node-action" data-action="reload-needed" data-name="${escapeAttr(n.name)}">${buttonIcon('alert')}未生效</button>`}
+                <button class="btn config-node-action" data-action="edit" data-name="${escapeAttr(n.name)}">${buttonIcon('edit')}编辑</button>
                 ${renderConfigNodeActionMenu(n)}
               </div>
             </td>
@@ -2294,7 +2923,6 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
         document.getElementById('configNodesPageText').textContent = `第 ${configNodesPage} / ${Math.max(configNodesTotalPages, 1)} 页`;
         document.getElementById('configNodesPrevBtn').disabled = configNodesPage <= 1;
         document.getElementById('configNodesNextBtn').disabled = configNodesPage >= Math.max(configNodesTotalPages, 1);
-        document.getElementById('subscriptionWarning').style.display = data.has_subscription_nodes ? 'block' : 'none';
       } catch(e){}
     }
 
@@ -2326,22 +2954,22 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
     function renderConfigNodeActionMenu(n) {
       const items = [];
       if (n.connect_socks) {
-        items.push(`<button class="btn btn-sm config-node-action" data-action="copy-socks" data-text="${escapeAttr(n.connect_socks)}">${buttonIcon('copy')}复制 SOCKS5</button>`);
+        items.push(`<button class="btn config-node-action" data-action="copy-socks" data-text="${escapeAttr(n.connect_socks)}">${buttonIcon('copy')}复制 SOCKS5</button>`);
       }
       if (n.connect_http) {
-        items.push(`<button class="btn btn-sm config-node-action" data-action="copy-http" data-text="${escapeAttr(n.connect_http)}">${buttonIcon('link')}复制 HTTP</button>`);
+        items.push(`<button class="btn config-node-action" data-action="copy-http" data-text="${escapeAttr(n.connect_http)}">${buttonIcon('link')}复制 HTTP</button>`);
       }
       if (n.runtime && n.runtime.tag) {
         if (n.runtime_state === 'blacklisted') {
-          items.push(`<button class="btn btn-sm btn-primary config-node-action" data-action="release" data-tag="${escapeAttr(n.runtime.tag)}" data-name="${escapeAttr(n.name)}">${buttonIcon('unlock')}解封</button>`);
+          items.push(`<button class="btn btn-primary config-node-action" data-action="release" data-tag="${escapeAttr(n.runtime.tag)}" data-name="${escapeAttr(n.name)}">${buttonIcon('unlock')}解封</button>`);
         } else {
-          items.push(`<button class="btn btn-sm btn-danger config-node-action" data-action="blacklist" data-tag="${escapeAttr(n.runtime.tag)}" data-name="${escapeAttr(n.name)}">${buttonIcon('ban')}拉黑</button>`);
+          items.push(`<button class="btn btn-danger config-node-action" data-action="blacklist" data-tag="${escapeAttr(n.runtime.tag)}" data-name="${escapeAttr(n.name)}">${buttonIcon('ban')}拉黑</button>`);
         }
       }
-      items.push(`<button class="btn btn-sm btn-danger config-node-action" data-action="delete" data-name="${escapeAttr(n.name)}">${buttonIcon('trash')}删除</button>`);
+      items.push(`<button class="btn btn-danger config-node-action" data-action="delete" data-name="${escapeAttr(n.name)}">${buttonIcon('trash')}删除</button>`);
       return `
         <div class="action-dropdown">
-          <button class="btn btn-sm config-node-action" data-action="toggle-menu">${buttonIcon('more')}更多</button>
+          <button class="btn config-node-action" data-action="toggle-menu">${buttonIcon('more')}更多</button>
           <div class="action-menu">
             ${items.join('')}
           </div>
@@ -2387,21 +3015,44 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
     }
 
     function closeConfigActionMenus() {
+      if (floatingActionMenu) {
+        floatingActionMenu.remove();
+        floatingActionMenu = null;
+        floatingActionMenuOwner = null;
+      }
       document.querySelectorAll('.action-dropdown.open').forEach(el => el.classList.remove('open'));
     }
 
-    document.getElementById('configNodesTableBody')?.addEventListener('click', (e) => {
-      const btn = e.target.closest('.config-node-action');
-      if (!btn) return;
+    function openFloatingActionMenu(btn) {
+      const wrap = btn.closest('.action-dropdown');
+      const menu = wrap?.querySelector('.action-menu');
+      if (!menu) return;
+      if (floatingActionMenuOwner === btn) {
+        closeConfigActionMenus();
+        return;
+      }
+      closeConfigActionMenus();
+      floatingActionMenuOwner = btn;
+      floatingActionMenu = menu.cloneNode(true);
+      floatingActionMenu.classList.add('floating', 'open');
+      document.body.appendChild(floatingActionMenu);
+      const rect = btn.getBoundingClientRect();
+      const menuRect = floatingActionMenu.getBoundingClientRect();
+      const gap = 6;
+      let left = Math.min(Math.max(8, rect.right - menuRect.width), window.innerWidth - menuRect.width - 8);
+      let top = rect.bottom + gap;
+      if (top + menuRect.height > window.innerHeight - 8) top = Math.max(8, rect.top - menuRect.height - gap);
+      floatingActionMenu.style.left = `${left}px`;
+      floatingActionMenu.style.top = `${top}px`;
+    }
+
+    function handleConfigNodeAction(btn) {
       const action = btn.dataset.action || '';
       const tag = btn.dataset.tag || '';
       const name = btn.dataset.name || '';
       const text = btn.dataset.text || '';
       if (action === 'toggle-menu') {
-        const wrap = btn.closest('.action-dropdown');
-        const willOpen = !wrap?.classList.contains('open');
-        closeConfigActionMenus();
-        if (wrap && willOpen) wrap.classList.add('open');
+        openFloatingActionMenu(btn);
         return;
       }
       closeConfigActionMenus();
@@ -2414,11 +3065,25 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
       if (action === 'reload-needed') return reloadNeededForConfigNode(name);
       if (action === 'copy-socks') return copyText(text, 'SOCKS5 连接信息');
       if (action === 'copy-http') return copyText(text, 'HTTP 连接信息');
+    }
+
+    document.getElementById('configNodesTableBody')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.config-node-action');
+      if (!btn) return;
+      handleConfigNodeAction(btn);
     });
 
     document.addEventListener('click', (e) => {
-      if (!e.target.closest('.action-dropdown')) closeConfigActionMenus();
+      const floatingBtn = e.target.closest('.action-menu.floating .config-node-action');
+      if (floatingBtn) {
+        handleConfigNodeAction(floatingBtn);
+        return;
+      }
+      if (!e.target.closest('.action-dropdown') && !e.target.closest('.action-menu.floating')) closeConfigActionMenus();
     });
+
+    window.addEventListener('scroll', closeConfigActionMenus, true);
+    window.addEventListener('resize', closeConfigActionMenus);
 
     async function copyText(text, label) {
       try {
@@ -2838,18 +3503,6 @@ https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertic
         document.getElementById('settingLogMaxAge').value = logCfg.max_age || 7;
         document.getElementById('settingLogCompress').checked = logCfg.compress || false;
         toggleLogFileSettings();
-        // Subscription
-        try {
-          const sr = await fetch('/api/subscription/config'); const sd = await sr.json();
-          document.getElementById('settingSubEnabled').checked = sd.enabled || false;
-          const iv = sd.interval || '';
-          const sel = document.getElementById('settingSubInterval');
-          let matched = false;
-          for (let opt of sel.options) { if (iv === opt.value || iv === opt.value.replace('m','m0s') || iv.startsWith(opt.value)) { sel.value = opt.value; matched = true; break; } }
-          if (!matched) sel.value = '1h';
-          document.getElementById('settingSubURLs').value = (sd.subscriptions || []).join('\n');
-          _savedSubSnapshot = JSON.stringify({urls: (sd.subscriptions || []).join('\n'), enabled: sd.enabled || false, interval: sel.value});
-        } catch(e){}
         // Take core snapshot after all fields are populated
         _savedCoreSnapshot = _buildCoreSnapshot();
         renderAPIDocs();
@@ -2930,103 +3583,74 @@ curl "${withAPIKey('/api/export?scheme=all')}"`);
       const saveBtn = e.target.querySelector('button[type="submit"]');
       const originalText = saveBtn.textContent;
 
-      // Build current snapshots for change detection
       const currentCoreSnapshot = _buildCoreSnapshot();
-      const subURLs = document.getElementById('settingSubURLs').value.split('\n').map(s => s.trim()).filter(s => s);
-      const subEnabled = document.getElementById('settingSubEnabled').checked;
-      const subInterval = document.getElementById('settingSubInterval').value;
-      const currentSubSnapshot = JSON.stringify({urls: subURLs.join('\n'), enabled: subEnabled, interval: subInterval});
-
       const coreChanged = currentCoreSnapshot !== _savedCoreSnapshot;
-      const subChanged = currentSubSnapshot !== _savedSubSnapshot;
 
-      if (!coreChanged && !subChanged) {
+      if (!coreChanged) {
         showToast('配置未变更'); return;
       }
 
-      // Save core settings if changed
-      if (coreChanged) {
-        saveBtn.disabled = true; saveBtn.textContent = '保存中...'; saveBtn.style.opacity = '0.6';
-        const p = {
-          external_ip: document.getElementById('settingExternalIP').value,
-          probe_target: document.getElementById('settingProbeTarget').value,
-          skip_cert_verify: document.getElementById('settingSkipCertVerify').checked,
-          mode: document.getElementById('settingMode').value,
-          listener: {
-            address: document.getElementById('settingListenerAddr').value,
-            port: parseInt(document.getElementById('settingListenerPort').value) || 0,
-            username: document.getElementById('settingListenerUser').value,
-            password: document.getElementById('settingListenerPass').value,
-          },
-          multi_port: {
-            address: document.getElementById('settingMPAddr').value,
-            base_port: parseInt(document.getElementById('settingMPBasePort').value) || 0,
-            username: document.getElementById('settingMPUser').value,
-            password: document.getElementById('settingMPPass').value,
-          },
-          pool: {
-            mode: document.getElementById('settingPoolMode').value,
-            failure_threshold: parseInt(document.getElementById('settingPoolFailure').value) || 3,
-            blacklist_duration: document.getElementById('settingPoolBlacklist').value || '24h',
-          },
-          management: {
-            listen: document.getElementById('settingMgmtListen').value,
-            health_check_interval: document.getElementById('settingHealthCheckInterval').value || '5m',
-            api_key: document.getElementById('settingMgmtAPIKey').value,
-            quality_enabled: document.getElementById('settingQualityEnabled').checked,
-            quality_provider: document.getElementById('settingQualityProvider').value,
-            quality_api_key: document.getElementById('settingQualityAPIKey').value,
-            quality_cache_ttl: document.getElementById('settingQualityCacheTTL').value || '6h',
-          },
-          log: {
-            output: document.getElementById('settingLogOutput').value,
-            max_size: parseInt(document.getElementById('settingLogMaxSize').value) || 50,
-            max_backups: parseInt(document.getElementById('settingLogMaxBackups').value) || 3,
-            max_age: parseInt(document.getElementById('settingLogMaxAge').value) || 7,
-            compress: document.getElementById('settingLogCompress').checked,
-          },
-          geoip: {
-            enabled: document.getElementById('settingGeoIPEnabled').checked,
-            database_path: document.getElementById('settingGeoIPDBPath').value,
-            listen: document.getElementById('settingGeoIPListen').value,
-            port: parseInt(document.getElementById('settingGeoIPPort').value) || 0,
-            auto_update_enabled: document.getElementById('settingGeoIPAutoUpdate').checked,
-            auto_update_interval: document.getElementById('settingGeoIPUpdateInterval').value || '24h',
-          }
-        };
-        try {
-          const r = await fetch('/api/settings', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(p)});
-          if(!r.ok) { showToast('保存失败', 'error'); saveBtn.disabled = false; saveBtn.textContent = originalText; saveBtn.style.opacity = '1'; return; }
-        } catch(e){ showToast('保存失败', 'error'); saveBtn.disabled = false; saveBtn.textContent = originalText; saveBtn.style.opacity = '1'; return; }
+      saveBtn.disabled = true; saveBtn.textContent = '保存中...'; saveBtn.style.opacity = '0.6';
+      const p = {
+        external_ip: document.getElementById('settingExternalIP').value,
+        probe_target: document.getElementById('settingProbeTarget').value,
+        skip_cert_verify: document.getElementById('settingSkipCertVerify').checked,
+        mode: document.getElementById('settingMode').value,
+        listener: {
+          address: document.getElementById('settingListenerAddr').value,
+          port: parseInt(document.getElementById('settingListenerPort').value) || 0,
+          username: document.getElementById('settingListenerUser').value,
+          password: document.getElementById('settingListenerPass').value,
+        },
+        multi_port: {
+          address: document.getElementById('settingMPAddr').value,
+          base_port: parseInt(document.getElementById('settingMPBasePort').value) || 0,
+          username: document.getElementById('settingMPUser').value,
+          password: document.getElementById('settingMPPass').value,
+        },
+        pool: {
+          mode: document.getElementById('settingPoolMode').value,
+          failure_threshold: parseInt(document.getElementById('settingPoolFailure').value) || 3,
+          blacklist_duration: document.getElementById('settingPoolBlacklist').value || '24h',
+        },
+        management: {
+          listen: document.getElementById('settingMgmtListen').value,
+          health_check_interval: document.getElementById('settingHealthCheckInterval').value || '5m',
+          api_key: document.getElementById('settingMgmtAPIKey').value,
+          quality_enabled: document.getElementById('settingQualityEnabled').checked,
+          quality_provider: document.getElementById('settingQualityProvider').value,
+          quality_api_key: document.getElementById('settingQualityAPIKey').value,
+          quality_cache_ttl: document.getElementById('settingQualityCacheTTL').value || '6h',
+        },
+        log: {
+          output: document.getElementById('settingLogOutput').value,
+          max_size: parseInt(document.getElementById('settingLogMaxSize').value) || 50,
+          max_backups: parseInt(document.getElementById('settingLogMaxBackups').value) || 3,
+          max_age: parseInt(document.getElementById('settingLogMaxAge').value) || 7,
+          compress: document.getElementById('settingLogCompress').checked,
+        },
+        geoip: {
+          enabled: document.getElementById('settingGeoIPEnabled').checked,
+          database_path: document.getElementById('settingGeoIPDBPath').value,
+          listen: document.getElementById('settingGeoIPListen').value,
+          port: parseInt(document.getElementById('settingGeoIPPort').value) || 0,
+          auto_update_enabled: document.getElementById('settingGeoIPAutoUpdate').checked,
+          auto_update_interval: document.getElementById('settingGeoIPUpdateInterval').value || '24h',
+        }
+      };
+      try {
+        const r = await fetch('/api/settings', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(p)});
+        if(!r.ok) { showToast('保存失败', 'error'); saveBtn.disabled = false; saveBtn.textContent = originalText; saveBtn.style.opacity = '1'; return; }
         _savedCoreSnapshot = currentCoreSnapshot;
-      }
-
-      // Save subscription config if changed
-      if (subChanged) {
-        showFullscreenLoading('更新订阅中...', '正在拉取订阅并重载节点，请稍候');
-        const subPayload = { subscriptions: subURLs, enabled: subEnabled, interval: subInterval };
-        try {
-          const sr = await fetch('/api/subscription/config', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(subPayload)});
-          hideFullscreenLoading();
-          if(!sr.ok) { showToast('订阅配置保存失败', 'error'); saveBtn.disabled = false; saveBtn.textContent = originalText; saveBtn.style.opacity = '1'; return; }
-          const sd = await sr.json();
-          _savedSubSnapshot = currentSubSnapshot;
-          if (sd.refresh_error) {
-            showToast('订阅已保存，但刷新失败: ' + sd.refresh_error, 'error');
-          } else if (sd.node_count !== undefined) {
-            showToast('已保存，获取 ' + sd.node_count + ' 个节点');
-          } else {
-            showToast('设置已保存');
-          }
-        } catch(e){ hideFullscreenLoading(); showToast('订阅配置保存失败', 'error'); saveBtn.disabled = false; saveBtn.textContent = originalText; saveBtn.style.opacity = '1'; return; }
-      } else if (coreChanged) {
-        // Core changed but no sub change — trigger reload
         showFullscreenLoading('重载核心中...', '正在应用新配置');
-        try {
-          const rr = await fetch('/api/reload', {method:'POST'});
-          hideFullscreenLoading();
-          if (rr.ok) { showToast('已保存并重载成功'); } else { showToast('已保存，重载失败', 'error'); }
-        } catch(e) { hideFullscreenLoading(); showToast('已保存，重载失败', 'error'); }
+        const rr = await fetch('/api/reload', {method:'POST'});
+        hideFullscreenLoading();
+        if (rr.ok) { showToast('已保存并重载成功'); } else { showToast('已保存，重载失败', 'error'); }
+      } catch(e) {
+        hideFullscreenLoading();
+        showToast('保存失败', 'error');
+        saveBtn.disabled = false; saveBtn.textContent = originalText; saveBtn.style.opacity = '1';
+        return;
       }
       saveBtn.disabled = false; saveBtn.textContent = originalText; saveBtn.style.opacity = '1';
       refresh();
@@ -3068,6 +3692,8 @@ curl "${withAPIKey('/api/export?scheme=all')}"`);
       if (regionChartInst) { regionChartInst.dispose(); regionChartInst = null; }
       if (latencyChartInst) { latencyChartInst.dispose(); latencyChartInst = null; }
       if (trafficChartInst) { trafficChartInst.dispose(); trafficChartInst = null; }
+      if (latencyDistChartInst) { latencyDistChartInst.dispose(); latencyDistChartInst = null; }
+      if (poolTrendChartInst) { poolTrendChartInst.dispose(); poolTrendChartInst = null; }
       if (successRateChartInst) { successRateChartInst.dispose(); successRateChartInst = null; }
       if (failureChartInst) { failureChartInst.dispose(); failureChartInst = null; }
 
@@ -3141,6 +3767,12 @@ curl "${withAPIKey('/api/export?scheme=all')}"`);
     document.getElementById('configNodeKeyword')?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') searchConfigNodes();
     });
+    document.getElementById('subscriptionNodeKeyword')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') searchSubscriptionNodes();
+    });
+    document.getElementById('subscriptionNodeRegionFilter')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') searchSubscriptionNodes();
+    });
     document.getElementById('settingMgmtAPIKey')?.addEventListener('input', renderAPIDocs);
     document.getElementById('configNodesPageJumpInput')?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') jumpConfigNodesPage();
@@ -3153,6 +3785,8 @@ curl "${withAPIKey('/api/export?scheme=all')}"`);
     document.getElementById('configNodeStatusFilter')?.addEventListener('change', () => loadConfigNodes(1));
     document.getElementById('configNodeRegionFilter')?.addEventListener('change', () => loadConfigNodes(1));
     document.getElementById('configNodePageSize')?.addEventListener('change', () => loadConfigNodes(1));
+    document.getElementById('subscriptionNodeStatusFilter')?.addEventListener('change', () => searchSubscriptionNodes());
+    document.getElementById('subscriptionNodePageSize')?.addEventListener('change', () => searchSubscriptionNodes());
     document.getElementById('debugNodesPageSize')?.addEventListener('change', () => {
       debugNodesPage = 1;
       renderDebugNodesPage();

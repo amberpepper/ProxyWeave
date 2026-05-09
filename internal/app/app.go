@@ -12,11 +12,17 @@ import (
 	"proxyweave/internal/config"
 	"proxyweave/internal/monitor"
 	"proxyweave/internal/outbound/pool"
+	storepkg "proxyweave/internal/store"
 	"proxyweave/internal/subscription"
 )
 
+type AppStore interface {
+	storepkg.AppStore
+	monitor.StateStore
+}
+
 // Run builds the runtime components from config and blocks until shutdown.
-func Run(ctx context.Context, cfg *config.Config) error {
+func Run(ctx context.Context, cfg *config.Config, store AppStore) error {
 	// Build monitor config
 	proxyUsername := cfg.Listener.Username
 	proxyPassword := cfg.Listener.Password
@@ -46,7 +52,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	// Create and start BoxManager
-	boxMgr := boxmgr.New(cfg, monitorCfg)
+	boxMgr := boxmgr.New(cfg, monitorCfg, boxmgr.WithStore(store))
 	if err := boxMgr.Start(ctx); err != nil {
 		return fmt.Errorf("start box manager: %w", err)
 	}
@@ -56,16 +62,14 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	if server := boxMgr.MonitorServer(); server != nil {
 		server.SetConfig(cfg)
 		server.SetTrafficStatsFn(pool.TrafficStats)
+		server.SetSettingsStore(store)
 	}
 
-	// Always create SubscriptionManager so WebUI can hot-reload subscription config
-	subMgr := subscription.New(cfg, boxMgr)
+	// Always create SubscriptionManager so WebUI can manage subscriptions dynamically
+	subMgr := subscription.New(cfg, boxMgr, store)
 	defer subMgr.Stop()
 
-	// Start refresh loop only if subscriptions are already configured
-	if cfg.SubscriptionRefresh.Enabled && len(cfg.Subscriptions) > 0 {
-		subMgr.Start()
-	}
+	subMgr.Start()
 
 	// Wire up subscription manager to monitor server for API endpoints
 	if server := boxMgr.MonitorServer(); server != nil {

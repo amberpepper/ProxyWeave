@@ -15,25 +15,20 @@
 
 ## 主要特性
 
-当前版本主要包含：
-
 - Web 管理面板（`/`）与管理 API（`/api/*`）
 - 实时流量带宽图（SSE，`/api/traffic`）与日志控制台（`/api/logs`）
-- 节点配置管理（增删改查）、单节点探测、批量探测、手动拉黑/解封
-- 订阅管理与定时刷新，刷新后热重载
+- 节点增删改查、单节点/批量探测、手动拉黑/解封
+- 基于 SQLite 持久化设置、节点、订阅和运行时状态
+- 每个订阅独立刷新间隔、独立节点关联、独立节点数统计
 - GeoIP 分区路由（如 `/jp`、`/us`）及 GeoLite2 自动更新
-- 运行时设置保存（写回 `config.yaml`）、日志轮转配置
 
 ## 安装
 
 ```bash
 git clone https://github.com/amberpepper/ProxyWeave.git
 cd ProxyWeave
-cp config.example.yaml config.yaml
-touch nodes.txt
+mkdir -p data logs
 ```
-
-编辑 `config.yaml`，并配置节点来源（`nodes.txt` / `subscriptions` / `nodes`）。
 
 ## 启动
 
@@ -48,9 +43,7 @@ docker compose up -d
 ### 直接使用镜像运行
 
 ```bash
-cp config.example.yaml config.yaml
-touch nodes.txt
-mkdir -p logs
+mkdir -p data logs
 
 docker pull ghcr.io/amberpepper/proxyweave:latest
 
@@ -58,8 +51,7 @@ docker run -d \
   --name proxyweave \
   --network host \
   --restart unless-stopped \
-  -v $(pwd)/config.yaml:/etc/proxyweave/config.yaml \
-  -v $(pwd)/nodes.txt:/etc/proxyweave/nodes.txt \
+  -v $(pwd)/data:/app/data \
   -v $(pwd)/logs:/app/logs \
   ghcr.io/amberpepper/proxyweave:latest
 ```
@@ -73,8 +65,7 @@ docker run -d \
   -p 2323:2323 \
   -p 9091:9091 \
   -p 24000-24100:24000-24100 \
-  -v $(pwd)/config.yaml:/etc/proxyweave/config.yaml \
-  -v $(pwd)/nodes.txt:/etc/proxyweave/nodes.txt \
+  -v $(pwd)/data:/app/data \
   -v $(pwd)/logs:/app/logs \
   ghcr.io/amberpepper/proxyweave:latest
 ```
@@ -82,13 +73,21 @@ docker run -d \
 ### 本地运行
 
 ```bash
-go run -tags "with_utls with_quic with_grpc with_wireguard with_gvisor with_clash_api" ./cmd/proxyweave -config config.yaml
+mkdir -p data logs
+
+go run -tags "with_utls with_quic with_grpc with_wireguard with_gvisor with_clash_api" ./cmd/proxyweave
 ```
 
 ## 访问
 
 - WebUI：`http://localhost:9091`
 - 默认代理入口（pool）：`127.0.0.1:2323`
+
+## 说明
+
+- SQLite 现在是唯一真实数据源。
+- 节点、订阅和运行时健康状态会在重启后保留。
+- 订阅请在 **节点管理 → 订阅管理** 页面维护。
 
 ## 停止
 
