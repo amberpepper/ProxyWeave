@@ -3,6 +3,8 @@ package pool
 import (
 	"context"
 	"net"
+	"sort"
+	"strings"
 	"sync"
 
 	M "github.com/sagernet/sing/common/metadata"
@@ -45,4 +47,18 @@ func ResetDialerRegistry() {
 		dialerRegistry.Delete(key)
 		return true
 	})
+}
+
+// ListDialerTagsByPrefix returns registered dialer tags with the given prefix.
+func ListDialerTagsByPrefix(prefix string) []string {
+	var tags []string
+	dialerRegistry.Range(func(key, _ any) bool {
+		tag, ok := key.(string)
+		if ok && strings.HasPrefix(tag, prefix) {
+			tags = append(tags, tag)
+		}
+		return true
+	})
+	sort.Strings(tags)
+	return tags
 }

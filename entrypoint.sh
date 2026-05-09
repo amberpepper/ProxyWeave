@@ -1,12 +1,12 @@
 #!/bin/sh
-# Fix bind-mount directory issue and ownership, then start easy_proxies
+# Fix bind-mount directory issue and ownership, then start proxyweave
 
 OVERRIDE_CONFIG=false
-CONFIG_PATH="/etc/easy_proxies/config.yaml"
+CONFIG_PATH="/etc/proxyweave/config.yaml"
 
 # Check if config.yaml was bind-mounted as a directory (Docker creates directories
 # for non-existent bind-mount sources)
-if [ -d "/etc/easy_proxies/config.yaml" ]; then
+if [ -d "/etc/proxyweave/config.yaml" ]; then
   echo "=======================================================" >&2
   echo "WARNING: config.yaml is a directory, not a file!" >&2
   echo "This happens when Docker creates the bind-mount target" >&2
@@ -43,7 +43,7 @@ YAML
 fi
 
 # Check if nodes.txt was bind-mounted as a directory
-if [ -d "/etc/easy_proxies/nodes.txt" ]; then
+if [ -d "/etc/proxyweave/nodes.txt" ]; then
   echo "=======================================================" >&2
   echo "WARNING: nodes.txt is a directory, not a file!" >&2
   echo "This happens when Docker creates the bind-mount target" >&2
@@ -56,12 +56,12 @@ if [ -d "/etc/easy_proxies/nodes.txt" ]; then
 fi
 
 # Fix ownership of mounted config directory so the non-root user can write
-chown -R easy:easy /etc/easy_proxies 2>/dev/null || true
+chown -R easy:easy /etc/proxyweave 2>/dev/null || true
 chown -R easy:easy /app 2>/dev/null || true
 
 if [ "$OVERRIDE_CONFIG" = "true" ]; then
   chown easy:easy "$CONFIG_PATH" 2>/dev/null || true
-  exec gosu easy /usr/local/bin/easy_proxies --config "$CONFIG_PATH"
+  exec gosu easy /usr/local/bin/proxyweave --config "$CONFIG_PATH"
 else
-  exec gosu easy /usr/local/bin/easy_proxies "$@"
+  exec gosu easy /usr/local/bin/proxyweave "$@"
 fi

@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"easy_proxies/internal/config"
-	"easy_proxies/internal/geoip"
-	poolout "easy_proxies/internal/outbound/pool"
+	"proxyweave/internal/config"
+	"proxyweave/internal/geoip"
+	poolout "proxyweave/internal/outbound/pool"
 
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
@@ -54,9 +54,7 @@ func Build(cfg *config.Config) (option.Options, error) {
 
 	// Track nodes by region for GeoIP routing
 	regionMembers := make(map[string][]string)
-	for _, region := range geoip.AllRegions() {
-		regionMembers[region] = []string{}
-	}
+	regionNames := make(map[string]string)
 
 	totalNodes := len(cfg.Nodes)
 	for i, node := range cfg.Nodes {
@@ -102,6 +100,7 @@ func Build(cfg *config.Config) (option.Options, error) {
 		// Default region (will be updated by concurrent GeoIP resolution)
 		meta.Region = geoip.RegionOther
 		meta.Country = "Unknown"
+		regionNames[geoip.RegionOther] = "Other"
 
 		metadata[tag] = meta
 	}
@@ -166,6 +165,9 @@ func Build(cfg *config.Config) (option.Options, error) {
 			meta.Country = res.region.Country
 			metadata[res.tag] = meta
 			regionMembers[res.region.Code] = append(regionMembers[res.region.Code], res.tag)
+			if name := strings.TrimSpace(res.region.Country); name != "" {
+				regionNames[res.region.Code] = name
+			}
 		}
 
 		log.Printf("🌍 GeoIP resolution completed in %.1fs", time.Since(geoStart).Seconds())
@@ -195,10 +197,14 @@ func Build(cfg *config.Config) (option.Options, error) {
 	// Log GeoIP region distribution
 	if cfg.GeoIP.Enabled {
 		log.Println("🌍 GeoIP Region Distribution:")
-		for _, region := range geoip.AllRegions() {
+		for _, region := range geoip.SortedRegionCodes(regionMembers) {
 			count := len(regionMembers[region])
 			if count > 0 {
-				log.Printf("   %s %s: %d nodes", geoip.RegionEmoji(region), geoip.RegionName(region), count)
+				name := regionNames[region]
+				if strings.TrimSpace(name) == "" {
+					name = geoip.RegionName(region)
+				}
+				log.Printf("   %s %s: %d nodes", geoip.RegionEmoji(region), name, count)
 			}
 		}
 	}
@@ -221,6 +227,8 @@ func Build(cfg *config.Config) (option.Options, error) {
 		return option.Options{}, fmt.Errorf("unsupported mode %s", cfg.Mode)
 	}
 
+	startupHealthMode, startupMinAvailable := config.ResolveStartupHealthCheckFromConfig(cfg)
+
 	// Build pool inbound (single entry point for all nodes)
 	if enablePoolInbound {
 		inbound, err := buildPoolInbound(cfg)
@@ -229,12 +237,16 @@ func Build(cfg *config.Config) (option.Options, error) {
 		}
 		inbounds = append(inbounds, inbound)
 		poolOptions := poolout.Options{
-			Mode:              cfg.Pool.Mode,
-			Members:           memberTags,
-			FailureThreshold:  cfg.Pool.FailureThreshold,
-			BlacklistDuration: cfg.Pool.BlacklistDuration,
-			Metadata:          metadata,
+			Mode:               cfg.Pool.Mode,
+			Members:            memberTags,
+			FailureThreshold:   cfg.Pool.FailureThreshold,
+			BlacklistDuration:  cfg.Pool.BlacklistDuration,
+			StartupHealthCheck: cfg.SubscriptionRefresh.StartupHealthCheck,
+			MinAvailable:       cfg.SubscriptionRefresh.MinAvailableNodes,
+			Metadata:           metadata,
 		}
+		poolOptions.StartupHealthCheck = startupHealthMode
+		poolOptions.MinAvailable = startupMinAvailable
 		outbounds = append(outbounds, option.Outbound{
 			Type:    poolout.Type,
 			Tag:     poolout.Tag,
@@ -254,12 +266,16 @@ func Build(cfg *config.Config) (option.Options, error) {
 			perMeta := map[string]poolout.MemberMeta{tag: meta}
 			poolTag := fmt.Sprintf("%s-%s", poolout.Tag, tag)
 			perOptions := poolout.Options{
-				Mode:              "sequential",
-				Members:           []string{tag},
-				FailureThreshold:  cfg.Pool.FailureThreshold,
-				BlacklistDuration: cfg.Pool.BlacklistDuration,
-				Metadata:          perMeta,
+				Mode:               "sequential",
+				Members:            []string{tag},
+				FailureThreshold:   cfg.Pool.FailureThreshold,
+				BlacklistDuration:  cfg.Pool.BlacklistDuration,
+				StartupHealthCheck: cfg.SubscriptionRefresh.StartupHealthCheck,
+				MinAvailable:       cfg.SubscriptionRefresh.MinAvailableNodes,
+				Metadata:           perMeta,
 			}
+			perOptions.StartupHealthCheck = startupHealthMode
+			perOptions.MinAvailable = startupMinAvailable
 			perPool := option.Outbound{
 				Type:    poolout.Type,
 				Tag:     poolTag,
@@ -303,7 +319,7 @@ func Build(cfg *config.Config) (option.Options, error) {
 	// Build GeoIP region-based pool outbounds and routing
 	if cfg.GeoIP.Enabled && enablePoolInbound {
 		// Create pool outbound for each region that has nodes
-		for _, region := range geoip.AllRegions() {
+		for _, region := range geoip.SortedRegionCodes(regionMembers) {
 			members := regionMembers[region]
 			if len(members) == 0 {
 				continue
@@ -317,12 +333,16 @@ func Build(cfg *config.Config) (option.Options, error) {
 
 			regionPoolTag := fmt.Sprintf("pool-%s", region)
 			regionPoolOptions := poolout.Options{
-				Mode:              cfg.Pool.Mode,
-				Members:           members,
-				FailureThreshold:  cfg.Pool.FailureThreshold,
-				BlacklistDuration: cfg.Pool.BlacklistDuration,
-				Metadata:          regionMeta,
+				Mode:               cfg.Pool.Mode,
+				Members:            members,
+				FailureThreshold:   cfg.Pool.FailureThreshold,
+				BlacklistDuration:  cfg.Pool.BlacklistDuration,
+				StartupHealthCheck: cfg.SubscriptionRefresh.StartupHealthCheck,
+				MinAvailable:       cfg.SubscriptionRefresh.MinAvailableNodes,
+				Metadata:           regionMeta,
 			}
+			regionPoolOptions.StartupHealthCheck = startupHealthMode
+			regionPoolOptions.MinAvailable = startupMinAvailable
 			outbounds = append(outbounds, option.Outbound{
 				Type:    poolout.Type,
 				Tag:     regionPoolTag,
@@ -341,7 +361,17 @@ func Build(cfg *config.Config) (option.Options, error) {
 		}
 		log.Println("🌐 GeoIP Region Routing Enabled:")
 		log.Printf("   Access via: http://%s:%d/{region}", geoipListen, geoipPort)
-		log.Println("   Available regions: /jp, /kr, /us, /hk, /tw, /sg, /other")
+		availableRegions := make([]string, 0, len(regionMembers))
+		for _, region := range geoip.SortedRegionCodes(regionMembers) {
+			if region == geoip.RegionOther || len(regionMembers[region]) == 0 {
+				continue
+			}
+			availableRegions = append(availableRegions, "/"+region)
+		}
+		if len(availableRegions) == 0 {
+			availableRegions = append(availableRegions, "/other")
+		}
+		log.Printf("   Available regions: %s", strings.Join(availableRegions, ", "))
 		log.Println("   Default (no path): all nodes pool")
 	}
 

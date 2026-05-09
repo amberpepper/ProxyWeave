@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -79,7 +80,18 @@ func (r *Router) Start(ctx context.Context) error {
 
 	go func() {
 		r.logger.Printf("🌐 GeoIP Router started on %s", addr)
-		r.logger.Println("   Routes: /jp, /kr, /us, /hk, /tw, /sg, /other (default: all nodes)")
+		r.mu.RLock()
+		regions := r.sortedRegionsLocked()
+		r.mu.RUnlock()
+		if len(regions) > 0 {
+			var routes []string
+			for _, region := range regions {
+				routes = append(routes, "/"+region)
+			}
+			r.logger.Printf("   Routes: %s (default: all nodes)", strings.Join(routes, ", "))
+		} else {
+			r.logger.Println("   Routes: dynamic by available country pools (default: all nodes)")
+		}
 		if err := r.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			r.logger.Printf("GeoIP router error: %v", err)
 		}
@@ -171,7 +183,10 @@ func (r *Router) parseRequest(req *http.Request) (region, targetHost string) {
 		// CONNECT requests: check if host starts with region prefix
 		// e.g., CONNECT jp/example.com:443 or just example.com:443
 		host := req.Host
-		for _, reg := range AllRegions() {
+		r.mu.RLock()
+		regions := r.sortedRegionsLocked()
+		r.mu.RUnlock()
+		for _, reg := range regions {
 			prefix := reg + "/"
 			if strings.HasPrefix(host, prefix) {
 				return reg, strings.TrimPrefix(host, prefix)
@@ -182,7 +197,10 @@ func (r *Router) parseRequest(req *http.Request) (region, targetHost string) {
 
 	// For regular HTTP requests, check URL path
 	path := req.URL.Path
-	for _, reg := range AllRegions() {
+	r.mu.RLock()
+	regions := r.sortedRegionsLocked()
+	r.mu.RUnlock()
+	for _, reg := range regions {
 		prefix := "/" + reg + "/"
 		if strings.HasPrefix(path, prefix) {
 			// Rewrite the path
@@ -197,6 +215,30 @@ func (r *Router) parseRequest(req *http.Request) (region, targetHost string) {
 	}
 
 	return "", req.Host
+}
+
+func (r *Router) sortedRegionsLocked() []string {
+	regions := make([]string, 0, len(r.pools))
+	for region := range r.pools {
+		region = strings.TrimSpace(strings.ToLower(region))
+		if region == "" {
+			continue
+		}
+		regions = append(regions, region)
+	}
+	sort.Slice(regions, func(i, j int) bool {
+		if regions[i] == RegionOther {
+			return false
+		}
+		if regions[j] == RegionOther {
+			return true
+		}
+		if len(regions[i]) != len(regions[j]) {
+			return len(regions[i]) > len(regions[j])
+		}
+		return regions[i] < regions[j]
+	})
+	return regions
 }
 
 // handleConnect handles HTTPS CONNECT tunneling

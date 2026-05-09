@@ -11,11 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"easy_proxies/internal/builder"
-	"easy_proxies/internal/config"
-	"easy_proxies/internal/geoip"
-	"easy_proxies/internal/monitor"
-	"easy_proxies/internal/outbound/pool"
+	"proxyweave/internal/builder"
+	"proxyweave/internal/config"
+	"proxyweave/internal/geoip"
+	"proxyweave/internal/monitor"
+	"proxyweave/internal/outbound/pool"
 
 	"github.com/sagernet/sing-box"
 	C "github.com/sagernet/sing-box/constant"
@@ -27,11 +27,11 @@ import (
 var _ monitor.NodeManager = (*Manager)(nil)
 
 const (
-	defaultDrainTimeout       = 10 * time.Second
-	defaultHealthCheckTimeout = 30 * time.Second
-	healthCheckPollInterval   = 500 * time.Millisecond
-	periodicHealthInterval    = 5 * time.Minute
-	periodicHealthTimeout     = 10 * time.Second
+	defaultDrainTimeout                = 10 * time.Second
+	defaultHealthCheckTimeout          = 30 * time.Second
+	defaultPeriodicHealthCheckInterval = 5 * time.Minute
+	healthCheckPollInterval            = 500 * time.Millisecond
+	periodicHealthTimeout              = 10 * time.Second
 )
 
 // Logger defines logging interface for the manager.
@@ -60,9 +60,10 @@ type Manager struct {
 	cfg           *config.Config
 	monitorCfg    monitor.Config
 
-	drainTimeout      time.Duration
-	minAvailableNodes int
-	logger            Logger
+	drainTimeout        time.Duration
+	minAvailableNodes   int
+	healthCheckInterval time.Duration
+	logger              Logger
 
 	baseCtx            context.Context
 	healthCheckStarted bool
@@ -108,6 +109,11 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.applyConfigSettings(m.cfg)
 	m.baseCtx = ctx
 	cfg := m.cfg
+	if len(cfg.Nodes) == 0 {
+		m.mu.Unlock()
+		m.logger.Infof("no nodes configured yet; WebUI/API is running and proxy runtime will start after nodes are added and reloaded")
+		return nil
+	}
 	m.mu.Unlock()
 
 	// Try to start, with automatic port conflict resolution
@@ -140,14 +146,15 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	// Start periodic health check after nodes are registered
 	m.mu.Lock()
-	if m.monitorMgr != nil && !m.healthCheckStarted {
-		m.monitorMgr.StartPeriodicHealthCheck(periodicHealthInterval, periodicHealthTimeout)
+	if m.monitorMgr != nil && !m.healthCheckStarted && m.healthCheckInterval > 0 {
+		m.monitorMgr.StartPeriodicHealthCheck(m.healthCheckInterval, periodicHealthTimeout)
 		m.healthCheckStarted = true
 	}
 	m.mu.Unlock()
 
-	// Wait for initial health check if min nodes configured
-	if cfg.SubscriptionRefresh.MinAvailableNodes > 0 {
+	// Wait for initial health check if configured to run on startup
+	startupHealthMode, startupMinAvailable := config.ResolveStartupHealthCheckFromConfig(cfg)
+	if config.ShouldRunStartupHealthCheck(startupHealthMode, startupMinAvailable) && startupMinAvailable > 0 {
 		timeout := cfg.SubscriptionRefresh.HealthCheckTimeout
 		if timeout <= 0 {
 			timeout = defaultHealthCheckTimeout
@@ -176,14 +183,10 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 	}
 
 	m.mu.Lock()
-	if m.currentBox == nil {
-		m.mu.Unlock()
-		return errors.New("manager not started")
-	}
 	ctx := m.baseCtx
 	oldBox := m.currentBox
 	oldCfg := m.cfg
-	m.currentBox = nil // Mark as reloading
+	m.currentBox = nil // Mark as reloading / stopped while rebuilding
 	m.mu.Unlock()
 
 	if ctx == nil {
@@ -192,8 +195,8 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 
 	m.logger.Infof("reloading with %d nodes", len(newCfg.Nodes))
 
-	// For multi-port mode, we must close old instance first to release ports
-	// This causes a brief interruption but avoids port conflicts
+	// For multi-port mode, we must close old instance first to release ports.
+	// This also handles the web-bootstrap case where oldBox is nil.
 	if oldBox != nil {
 		m.logger.Infof("stopping old instance to release ports...")
 		if err := oldBox.Close(); err != nil {
@@ -220,6 +223,20 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 		m.monitorMgr.ClearNodes()
 	}
 
+	// If all nodes were removed, keep only WebUI/API running.
+	if len(newCfg.Nodes) == 0 {
+		m.applyConfigSettings(newCfg)
+		m.mu.Lock()
+		m.cfg = newCfg
+		m.currentBox = nil
+		m.mu.Unlock()
+		if m.monitorServer != nil {
+			m.monitorServer.SetConfig(m.cfg)
+		}
+		m.logger.Infof("reload completed with no nodes; proxy runtime stopped, WebUI/API remains available")
+		return nil
+	}
+
 	// Create and start new box instance with automatic port conflict resolution
 	var instance *box.Box
 	maxRetries := 10
@@ -227,7 +244,11 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 		var err error
 		instance, err = m.createBox(ctx, newCfg)
 		if err != nil {
-			m.rollbackToOldConfig(ctx, oldCfg)
+			if oldBox != nil {
+				m.rollbackToOldConfig(ctx, oldCfg)
+			} else {
+				m.restoreStoppedConfig(oldCfg)
+			}
 			return fmt.Errorf("create new box: %w", err)
 		}
 		if err = instance.Start(); err != nil {
@@ -240,7 +261,11 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 					continue
 				}
 			}
-			m.rollbackToOldConfig(ctx, oldCfg)
+			if oldBox != nil {
+				m.rollbackToOldConfig(ctx, oldCfg)
+			} else {
+				m.restoreStoppedConfig(oldCfg)
+			}
 			return fmt.Errorf("start new box: %w", err)
 		}
 		break // Success
@@ -258,10 +283,13 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 		m.monitorServer.SetConfig(m.cfg)
 	}
 
-	// Trigger initial health check for newly registered nodes
-	if m.monitorMgr != nil {
+	// Trigger initial health check for newly registered nodes if configured
+	startupHealthMode, startupMinAvailable := config.ResolveStartupHealthCheckFromConfig(newCfg)
+	if m.monitorMgr != nil && config.ShouldRunStartupHealthCheck(startupHealthMode, startupMinAvailable) {
 		go m.monitorMgr.ProbeAllNow(periodicHealthTimeout)
 	}
+	newCfg.SuppressStartupHealthCheck = false
+	m.applyConfigSettings(newCfg)
 
 	m.logger.Infof("reload completed successfully with %d nodes", len(newCfg.Nodes))
 
@@ -278,6 +306,18 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 	}
 
 	return nil
+}
+
+// restoreStoppedConfig restores config metadata when there was no previous
+// sing-box instance to roll back to (for example, initial WebUI bootstrap).
+func (m *Manager) restoreStoppedConfig(oldCfg *config.Config) {
+	m.mu.Lock()
+	m.currentBox = nil
+	m.cfg = oldCfg
+	m.mu.Unlock()
+	if m.monitorServer != nil {
+		m.monitorServer.SetConfig(m.cfg)
+	}
 }
 
 // rollbackToOldConfig attempts to restart with the previous configuration.
@@ -384,9 +424,12 @@ func (m *Manager) startGeoIPRouter(ctx context.Context, cfg *config.Config) {
 
 	router := geoip.NewRouter(routerCfg, nil)
 
-	// Register region pool dialers
-	for _, region := range geoip.AllRegions() {
-		poolTag := fmt.Sprintf("pool-%s", region)
+	// Register country / region pool dialers dynamically from the pool registry.
+	for _, poolTag := range pool.ListDialerTagsByPrefix("pool-") {
+		region := strings.TrimPrefix(poolTag, "pool-")
+		if region == "" {
+			continue
+		}
 		if dialer, ok := pool.GetDialer(poolTag); ok {
 			router.SetPool(region, dialer)
 			log.Printf("   GeoIP: registered pool %s for region /%s", poolTag, region)
@@ -471,7 +514,7 @@ func (m *Manager) createBox(ctx context.Context, cfg *config.Config) (*box.Box, 
 				if poolOpts, ok := ob.Options.(*pool.Options); ok {
 					poolOpts.Members = removeFromSlice(poolOpts.Members, badTag)
 					delete(poolOpts.Metadata, badTag)
-					
+
 					// If the pool is now empty, remove it to avoid another validation error
 					if len(poolOpts.Members) == 0 {
 						log.Printf("⚠️  Removing empty pool '%s'", ob.Tag)
@@ -651,7 +694,12 @@ func (m *Manager) applyConfigSettings(cfg *config.Config) {
 	} else if m.drainTimeout == 0 {
 		m.drainTimeout = defaultDrainTimeout
 	}
-	m.minAvailableNodes = cfg.SubscriptionRefresh.MinAvailableNodes
+	_, m.minAvailableNodes = config.ResolveStartupHealthCheckFromConfig(cfg)
+	if cfg.Management.HealthCheckInterval >= 0 {
+		m.healthCheckInterval = cfg.Management.HealthCheckInterval
+	} else if m.healthCheckInterval == 0 {
+		m.healthCheckInterval = defaultPeriodicHealthCheckInterval
+	}
 }
 
 // defaultLogger is the fallback logger using standard log.
@@ -722,10 +770,11 @@ func (m *Manager) CreateNode(ctx context.Context, node config.NodeConfig) (confi
 		return config.NodeConfig{}, err
 	}
 
-	// Determine source: if subscriptions exist, new nodes go to nodes.txt (subscription source)
-	// Otherwise, if nodes_file exists, use file source; else inline
+	// Determine source. Web-created manual nodes should stay manually managed.
+	// When subscriptions exist, store them inline so a future subscription refresh
+	// does not overwrite them in nodes.txt.
 	if len(m.cfg.Subscriptions) > 0 {
-		normalized.Source = config.NodeSourceSubscription
+		normalized.Source = config.NodeSourceInline
 	} else if m.cfg.NodesFile != "" {
 		normalized.Source = config.NodeSourceFile
 	} else {
@@ -875,7 +924,6 @@ func extractPortFromBindError(err error) uint16 {
 	return 0
 }
 
-
 // reassignConflictingPort finds the node using the conflicting port and assigns a new port.
 func reassignConflictingPort(cfg *config.Config, conflictPort uint16) bool {
 	// Build set of used ports
@@ -1011,8 +1059,8 @@ func (m *Manager) prepareNodeLocked(node config.NodeConfig, currentName string) 
 		}
 	}
 
-	// Handle multi-port mode specifics
-	if m.cfg.Mode == "multi-port" {
+	// Handle multi-port/hybrid mode specifics
+	if m.cfg.Mode == "multi-port" || m.cfg.Mode == "hybrid" {
 		if node.Port == 0 {
 			node.Port = m.nextAvailablePortLocked()
 		} else if m.portInUseLocked(node.Port, currentName) {

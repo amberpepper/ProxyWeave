@@ -1,4 +1,4 @@
-name: Build and Push Docker Image
+name: Docker Image
 
 on:
   push:
@@ -9,19 +9,89 @@ on:
   workflow_dispatch:
 
 env:
+  GO_VERSION: '1.24.4'
+  BINARY_NAME: proxyweave
+  BUILD_TAGS: with_utls with_quic with_grpc with_wireguard with_gvisor with_clash_api
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ${{ github.repository_owner }}/proxyweave
 
 jobs:
-  build-and-push:
+  test:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Run tests
+        run: go test ./...
+
+  build-linux-binaries:
+    name: Build linux binary (${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+          - goarch: arm64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build binary
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p dist/linux/${GOARCH}
+          go build \
+            -trimpath \
+            -tags "${BUILD_TAGS}" \
+            -o "dist/linux/${GOARCH}/${BINARY_NAME}" \
+            ./cmd/proxyweave
+
+      - name: Upload linux binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxyweave-linux-${{ matrix.goarch }}
+          path: dist/linux/${{ matrix.goarch }}/${{ env.BINARY_NAME }}
+          if-no-files-found: error
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: build-linux-binaries
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download linux binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: .artifacts
+
+      - name: Prepare Docker build context
+        run: |
+          mkdir -p release/linux/amd64 release/linux/arm64
+          cp .artifacts/proxyweave-linux-amd64/${BINARY_NAME} release/linux/amd64/${BINARY_NAME}
+          cp .artifacts/proxyweave-linux-arm64/${BINARY_NAME} release/linux/arm64/${BINARY_NAME}
+          chmod +x release/linux/amd64/${BINARY_NAME} release/linux/arm64/${BINARY_NAME}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -50,9 +120,10 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
+          file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}

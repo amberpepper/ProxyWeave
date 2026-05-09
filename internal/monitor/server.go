@@ -4,23 +4,29 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"crypto/tls"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"math/big"
 	mathrand "math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"easy_proxies/internal/config"
-	"easy_proxies/internal/geoip"
+	"golang.org/x/net/proxy"
 	"golang.org/x/sync/semaphore"
+	"proxyweave/internal/config"
+	"proxyweave/internal/geoip"
 )
 
 //go:embed assets/index.html
@@ -57,6 +63,10 @@ type SubscriptionRefresher interface {
 	UpdateConfigAndRefresh(urls []string, enabled bool, interval time.Duration) error
 }
 
+type ProxyTestFunc func(uri string, skipCertVerify bool, probeTarget string) (success bool, latencyMs int64, errMsg string)
+
+type TrafficStatsFunc func() map[string][2]int64
+
 // SubscriptionStatus represents subscription refresh status.
 type SubscriptionStatus struct {
 	LastRefresh   time.Time `json:"last_refresh"`
@@ -70,12 +80,12 @@ type SubscriptionStatus struct {
 
 // Server exposes HTTP endpoints for monitoring.
 type Server struct {
-	cfg          Config
-	cfgMu        sync.RWMutex   // 保护动态配置字段
-	cfgSrc       *config.Config // 可持久化的配置对象
-	mgr          *Manager
-	srv          *http.Server
-	logger       *log.Logger
+	cfg    Config
+	cfgMu  sync.RWMutex   // 保护动态配置字段
+	cfgSrc *config.Config // 可持久化的配置对象
+	mgr    *Manager
+	srv    *http.Server
+	logger *log.Logger
 
 	// Session management
 	sessionMu  sync.RWMutex
@@ -87,6 +97,8 @@ type Server struct {
 
 	subRefresher SubscriptionRefresher
 	nodeMgr      NodeManager
+	proxyTestFn  ProxyTestFunc
+	trafficFn    TrafficStatsFunc
 }
 
 // NewServer constructs a server; it can be nil when disabled.
@@ -123,8 +135,12 @@ func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
 	mux.HandleFunc("/api/nodes", s.withAuth(s.handleNodes))
 	mux.HandleFunc("/api/nodes/config", s.withAuth(s.handleConfigNodes))
 	mux.HandleFunc("/api/nodes/config/", s.withAuth(s.handleConfigNodeItem))
+	mux.HandleFunc("/api/nodes/test", s.withAuth(s.handleNodeTest))
 	mux.HandleFunc("/api/nodes/probe-all", s.withAuth(s.handleProbeAll))
+	mux.HandleFunc("/api/nodes/quality-all", s.withAuth(s.handleQualityAll))
 	mux.HandleFunc("/api/nodes/", s.withAuth(s.handleNodeAction))
+	mux.HandleFunc("/api/proxy", s.withAuth(s.handleProxyAPI))
+	mux.HandleFunc("/api/proxy/", s.withAuth(s.handleProxyAPI))
 	mux.HandleFunc("/api/debug", s.withAuth(s.handleDebug))
 	mux.HandleFunc("/api/export", s.withAuth(s.handleExport))
 	mux.HandleFunc("/api/subscription/status", s.withAuth(s.handleSubscriptionStatus))
@@ -151,6 +167,18 @@ func (s *Server) SetNodeManager(nm NodeManager) {
 	}
 }
 
+func (s *Server) SetProxyTestFn(fn ProxyTestFunc) {
+	if s != nil {
+		s.proxyTestFn = fn
+	}
+}
+
+func (s *Server) SetTrafficStatsFn(fn TrafficStatsFunc) {
+	if s != nil {
+		s.trafficFn = fn
+	}
+}
+
 // SetConfig binds the persistable config object for settings API.
 func (s *Server) SetConfig(cfg *config.Config) {
 	if s == nil {
@@ -158,7 +186,6 @@ func (s *Server) SetConfig(cfg *config.Config) {
 	}
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
-	// Preserve subscription config from previous cfgSrc if new config has none
 	if cfg != nil && s.cfgSrc != nil {
 		if len(cfg.Subscriptions) == 0 && len(s.cfgSrc.Subscriptions) > 0 {
 			cfg.Subscriptions = s.cfgSrc.Subscriptions
@@ -171,6 +198,8 @@ func (s *Server) SetConfig(cfg *config.Config) {
 	if cfg != nil {
 		s.cfg.ExternalIP = cfg.ExternalIP
 		s.cfg.ProbeTarget = cfg.Management.ProbeTarget
+		s.cfg.Password = cfg.Management.Password
+		s.cfg.APIKey = cfg.Management.APIKey
 		s.cfg.SkipCertVerify = cfg.SkipCertVerify
 		// Sync proxy credentials based on mode
 		if cfg.Mode == "multi-port" || cfg.Mode == "hybrid" {
@@ -283,31 +312,119 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	// 只返回初始检查通过的可用节点
-	filtered := s.mgr.SnapshotFiltered(true)
+
+	page := 1
+	if v, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page"))); err == nil && v > 0 {
+		page = v
+	}
+	pageSize := 20
+	if v, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page_size"))); err == nil && v > 0 {
+		if v > 200 {
+			v = 200
+		}
+		pageSize = v
+	}
+	regionFilter := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("region")))
+	if regionFilter == "" {
+		regionFilter = "all"
+	}
+
+	// 管理面板统计按全部节点计算；表格按分页/筛选返回。
 	allNodes := s.mgr.Snapshot()
 	totalNodes := len(allNodes)
 
 	// Calculate region statistics
 	regionStats := make(map[string]int)
 	regionHealthy := make(map[string]int)
+	healthyNodes := 0
+	blacklistedNodes := 0
+	activeConnections := 0
 	for _, snap := range allNodes {
 		region := snap.Region
 		if region == "" {
 			region = "other"
 		}
 		regionStats[region]++
+		activeConnections += int(snap.ActiveConnections)
 		// Count healthy nodes per region
 		if snap.InitialCheckDone && snap.Available && !snap.Blacklisted {
 			regionHealthy[region]++
+			healthyNodes++
+		}
+		if snap.Blacklisted || (snap.InitialCheckDone && !snap.Available) {
+			blacklistedNodes++
 		}
 	}
 
+	filteredNodes := make([]Snapshot, 0, len(allNodes))
+	for _, snap := range allNodes {
+		region := snap.Region
+		if region == "" {
+			region = "other"
+		}
+		if regionFilter != "all" && region != regionFilter {
+			continue
+		}
+		filteredNodes = append(filteredNodes, snap)
+	}
+
+	filteredTotal := len(filteredNodes)
+	totalPages := 0
+	if filteredTotal > 0 {
+		totalPages = (filteredTotal + pageSize - 1) / pageSize
+	}
+	if totalPages == 0 {
+		page = 1
+	} else if page > totalPages {
+		page = totalPages
+	}
+	start := 0
+	end := 0
+	if filteredTotal > 0 {
+		start = (page - 1) * pageSize
+		if start < 0 {
+			start = 0
+		}
+		if start > filteredTotal {
+			start = filteredTotal
+		}
+		end = start + pageSize
+		if end > filteredTotal {
+			end = filteredTotal
+		}
+	}
+	pageNodes := []Snapshot{}
+	if filteredTotal > 0 && start < end {
+		pageNodes = filteredNodes[start:end]
+	}
+
+	fastestCandidates := make([]Snapshot, 0, len(allNodes))
+	for _, snap := range allNodes {
+		if snap.LastLatencyMs > 0 && !snap.Blacklisted {
+			fastestCandidates = append(fastestCandidates, snap)
+		}
+	}
+	sort.Slice(fastestCandidates, func(i, j int) bool {
+		return fastestCandidates[i].LastLatencyMs < fastestCandidates[j].LastLatencyMs
+	})
+	if len(fastestCandidates) > 10 {
+		fastestCandidates = fastestCandidates[:10]
+	}
+
 	payload := map[string]any{
-		"nodes":          filtered,
-		"total_nodes":    totalNodes,
-		"region_stats":   regionStats,
-		"region_healthy": regionHealthy,
+		"nodes":              pageNodes,
+		"total_nodes":        totalNodes,
+		"filtered_total":     filteredTotal,
+		"page":               page,
+		"page_size":          pageSize,
+		"total_pages":        totalPages,
+		"region_filter":      regionFilter,
+		"healthy_nodes":      healthyNodes,
+		"blacklisted_nodes":  blacklistedNodes,
+		"active_connections": activeConnections,
+		"region_stats":       regionStats,
+		"region_healthy":     regionHealthy,
+		"fastest_nodes":      fastestCandidates,
 	}
 	writeJSON(w, payload)
 }
@@ -384,6 +501,19 @@ func (s *Server) handleNodeAction(w http.ResponseWriter, r *http.Request) {
 			latencyMs = 1 // Round up sub-millisecond latencies to 1ms
 		}
 		writeJSON(w, map[string]any{"message": "探测成功", "latency_ms": latencyMs})
+	case "quality":
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		info, err := s.mgr.Quality(ctx, tag, true)
+		if err != nil {
+			writeJSON(w, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]any{"message": "质量检查成功", "quality": info})
 	case "release":
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -417,6 +547,219 @@ func (s *Server) handleNodeAction(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+func (s *Server) handleNodeTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		URI string `json:"uri"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, map[string]any{"error": "请求格式错误"})
+		return
+	}
+
+	uri := strings.TrimSpace(req.URI)
+	if uri == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, map[string]any{"error": "URI 不能为空"})
+		return
+	}
+
+	success, latencyMs, errMsg := s.testProxyURI(uri)
+	if !success {
+		writeJSON(w, map[string]any{"error": errMsg})
+		return
+	}
+	writeJSON(w, map[string]any{
+		"message":    "测试成功",
+		"latency_ms": latencyMs,
+	})
+}
+
+func (s *Server) testProxyURI(rawURI string) (bool, int64, string) {
+	if s.proxyTestFn != nil {
+		_, probeTarget, skipCertVerify, _ := s.getSettings()
+		return s.proxyTestFn(rawURI, skipCertVerify, probeTarget)
+	}
+
+	proxyURL, err := url.Parse(rawURI)
+	if err != nil {
+		return false, 0, "代理 URI 格式错误"
+	}
+	scheme := strings.ToLower(strings.TrimSpace(proxyURL.Scheme))
+	if scheme == "socks" {
+		scheme = "socks5"
+	}
+	if scheme != "http" && scheme != "https" && scheme != "socks5" {
+		return false, 0, "当前仅支持测试 HTTP/HTTPS/SOCKS5 代理"
+	}
+
+	_, probeTarget, skipCertVerify, _ := s.getSettings()
+	target := strings.TrimSpace(probeTarget)
+	if target == "" {
+		target = "http://cp.cloudflare.com/generate_204"
+	}
+	if !strings.Contains(target, "://") {
+		target = "http://" + target
+	}
+	targetURL, err := url.Parse(target)
+	if err != nil {
+		return false, 0, "健康检查目标格式错误"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: skipCertVerify, //nolint:gosec
+		},
+	}
+
+	if scheme == "socks5" {
+		dialer, err := proxy.FromURL(proxyURL, proxy.Direct)
+		if err != nil {
+			return false, 0, err.Error()
+		}
+		if contextDialer, ok := dialer.(proxy.ContextDialer); ok {
+			transport.DialContext = contextDialer.DialContext
+		} else {
+			transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+				type result struct {
+					conn net.Conn
+					err  error
+				}
+				ch := make(chan result, 1)
+				go func() {
+					conn, dialErr := dialer.Dial(network, addr)
+					ch <- result{conn: conn, err: dialErr}
+				}()
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case res := <-ch:
+					return res.conn, res.err
+				}
+			}
+		}
+	} else {
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   15 * time.Second,
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL.String(), nil)
+	if err != nil {
+		return false, 0, err.Error()
+	}
+
+	start := time.Now()
+	response, err := client.Do(request)
+	if err != nil {
+		return false, 0, err.Error()
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode < 200 || response.StatusCode >= 400 {
+		return false, 0, fmt.Sprintf("探测目标返回状态码 %d", response.StatusCode)
+	}
+
+	latencyMs := time.Since(start).Milliseconds()
+	if latencyMs <= 0 {
+		latencyMs = 1
+	}
+	return true, latencyMs, ""
+}
+
+// handleQualityAll checks exit-IP/ASN quality for all nodes and returns results via SSE.
+func (s *Server) handleQualityAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return
+	}
+
+	snapshots := s.mgr.Snapshot()
+	total := len(snapshots)
+	startData, _ := json.Marshal(map[string]any{"type": "start", "total": total})
+	fmt.Fprintf(w, "data: %s\n\n", startData)
+	flusher.Flush()
+	if total == 0 {
+		completeData, _ := json.Marshal(map[string]any{"type": "complete", "total": 0, "success": 0, "failed": 0})
+		fmt.Fprintf(w, "data: %s\n\n", completeData)
+		flusher.Flush()
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+	type qualityResult struct {
+		tag  string
+		name string
+		info QualityInfo
+		err  string
+	}
+	results := make(chan qualityResult, total)
+	var wg sync.WaitGroup
+
+	for _, snap := range snapshots {
+		wg.Add(1)
+		go func(snap Snapshot) {
+			defer wg.Done()
+			if err := s.probeSem.Acquire(ctx, 1); err != nil {
+				results <- qualityResult{tag: snap.Tag, name: snap.Name, err: "quality check cancelled: " + err.Error()}
+				return
+			}
+			defer s.probeSem.Release(1)
+			qualityCtx, qualityCancel := context.WithTimeout(ctx, 25*time.Second)
+			defer qualityCancel()
+			info, err := s.mgr.Quality(qualityCtx, snap.Tag, true)
+			if err != nil {
+				results <- qualityResult{tag: snap.Tag, name: snap.Name, err: err.Error()}
+				return
+			}
+			results <- qualityResult{tag: snap.Tag, name: snap.Name, info: info}
+		}(snap)
+	}
+	go func() { wg.Wait(); close(results) }()
+
+	successCount, failedCount, count := 0, 0, 0
+	for result := range results {
+		count++
+		if result.err != "" {
+			failedCount++
+		} else {
+			successCount++
+		}
+		eventPayload := map[string]any{
+			"type": "progress", "tag": result.tag, "name": result.name,
+			"status": map[bool]string{true: "error", false: "success"}[result.err != ""],
+			"error":  result.err, "quality": result.info,
+			"current": count, "total": total, "progress": float64(count) / float64(total) * 100,
+		}
+		data, _ := json.Marshal(eventPayload)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+	completeData, _ := json.Marshal(map[string]any{"type": "complete", "total": total, "success": successCount, "failed": failedCount})
+	fmt.Fprintf(w, "data: %s\n\n", completeData)
+	flusher.Flush()
 }
 
 // handleProbeAll probes all nodes in batches and returns results via SSE
@@ -557,11 +900,54 @@ func writeJSON(w http.ResponseWriter, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-// withAuth 认证中间件，如果配置了密码则需要验证
+func (s *Server) hasManagementAuth() bool {
+	return s.authKey() != ""
+}
+
+func (s *Server) authKey() string {
+	if strings.TrimSpace(s.cfg.APIKey) != "" {
+		return strings.TrimSpace(s.cfg.APIKey)
+	}
+	return strings.TrimSpace(s.cfg.Password)
+}
+
+func (s *Server) validAPIKey(key string) bool {
+	key = strings.TrimSpace(key)
+	authKey := s.authKey()
+	return key != "" && authKey != "" && secureCompareStrings(key, authKey)
+}
+
+func (s *Server) validAPIKeyFromRequest(r *http.Request) bool {
+	if s.validAPIKey(r.Header.Get("X-API-Key")) {
+		return true
+	}
+	if s.validAPIKey(r.URL.Query().Get("api_key")) {
+		return true
+	}
+	if s.validAPIKey(r.URL.Query().Get("apikey")) {
+		return true
+	}
+	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+	if authHeader == "" {
+		return false
+	}
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		return s.validAPIKey(strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer ")))
+	}
+	return s.validAPIKey(authHeader)
+}
+
+// withAuth 认证中间件，如果配置了 api_key（兼容旧 password）则需要验证
 func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// 如果没有配置密码，直接放行
-		if s.cfg.Password == "" {
+		// 如果没有配置密码和 API key，直接放行
+		if !s.hasManagementAuth() {
+			next(w, r)
+			return
+		}
+
+		// 检查 API key（适合程序/API 调用）
+		if s.validAPIKeyFromRequest(r) {
 			next(w, r)
 			return
 		}
@@ -591,9 +977,9 @@ func (s *Server) withAuth(next http.HandlerFunc) http.HandlerFunc {
 
 // handleAuth 处理登录认证
 func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
-	// 如果没有配置密码，直接返回成功（不需要token）
-	if s.cfg.Password == "" {
-		writeJSON(w, map[string]any{"message": "无需密码", "no_password": true})
+	// 如果没有配置鉴权 key，直接返回成功（不需要 token）
+	if !s.hasManagementAuth() {
+		writeJSON(w, map[string]any{"message": "无需认证", "no_password": true})
 		return
 	}
 
@@ -604,6 +990,8 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		Password string `json:"password"`
+		APIKey   string `json:"api_key"`
+		Key      string `json:"key"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -612,12 +1000,19 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 使用 constant-time 比较防止时序攻击
-	if !secureCompareStrings(req.Password, s.cfg.Password) {
-		// 添加随机延迟防止暴力破解
+	keyCandidate := req.APIKey
+	if keyCandidate == "" {
+		keyCandidate = req.Key
+	}
+	if keyCandidate == "" {
+		keyCandidate = req.Password
+	}
+	keyOK := s.validAPIKey(keyCandidate)
+
+	if !keyOK {
 		time.Sleep(time.Duration(100+mathrand.Intn(200)) * time.Millisecond)
 		w.WriteHeader(http.StatusUnauthorized)
-		writeJSON(w, map[string]any{"error": "密码错误"})
+		writeJSON(w, map[string]any{"error": "API key 错误"})
 		return
 	}
 
@@ -730,12 +1125,20 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		if listenerCfg.Username != "" && listenerCfg.Password != "" {
 			geoAuth = fmt.Sprintf("%s:%s@", listenerCfg.Username, listenerCfg.Password)
 		}
-		regions := geoip.AllRegions()
-		var pathParts []string
-		for _, r := range regions {
-			if r != "other" {
-				pathParts = append(pathParts, fmt.Sprintf("/%s/", r))
+		regionSet := make(map[string]struct{})
+		for _, snap := range snapshots {
+			region := strings.TrimSpace(strings.ToLower(snap.Region))
+			if region == "" || region == geoip.RegionOther {
+				continue
 			}
+			regionSet[region] = struct{}{}
+		}
+		var pathParts []string
+		for _, r := range geoip.SortedRegionCodes(regionSet) {
+			pathParts = append(pathParts, fmt.Sprintf("/%s/", r))
+		}
+		if len(pathParts) == 0 {
+			pathParts = append(pathParts, "/other/")
 		}
 		lines = append(lines, fmt.Sprintf("# GeoIP 分区路由入口 (支持路径: %s)", strings.Join(pathParts, " ")))
 		// GeoIP 路由仅支持 HTTP
@@ -805,6 +1208,298 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(strings.Join(lines, "\n")))
 }
 
+// handleProxyAPI returns a directly usable proxy URI for automation.
+//
+// Supported forms:
+//
+//	GET /api/proxy/random?scheme=http|socks5|all&format=text|json
+//	GET /api/proxy/fixed?name=node-1&scheme=http
+//	GET /api/proxy?mode=random|fixed|pool&name=...&tag=...&port=...
+//
+// Filters for random/fixed runtime nodes:
+//
+//	country=us,jp,cn...    proxy_type=isp|datacenter|mobile|unknown
+//	healthy=1              default true for random, false for fixed
+func (s *Server) handleProxyAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	q := r.URL.Query()
+	mode := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/proxy"), "/")
+	if mode == "" {
+		mode = strings.ToLower(strings.TrimSpace(q.Get("mode")))
+	}
+	if mode == "" {
+		mode = "random"
+	}
+	if mode != "random" && mode != "fixed" && mode != "pool" {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, map[string]any{"error": "invalid mode, use random/fixed/pool"})
+		return
+	}
+
+	scheme := strings.ToLower(strings.TrimSpace(q.Get("scheme")))
+	if scheme == "" {
+		scheme = "http"
+	}
+	if scheme != "http" && scheme != "socks5" && scheme != "all" {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, map[string]any{"error": "invalid scheme, use http/socks5/all"})
+		return
+	}
+
+	format := strings.ToLower(strings.TrimSpace(q.Get("format")))
+	if format == "" {
+		format = "text"
+	}
+	if format != "text" && format != "json" {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, map[string]any{"error": "invalid format, use text/json"})
+		return
+	}
+
+	if mode == "pool" {
+		uris, resp, err := s.poolProxyURIs(r, scheme)
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			writeJSON(w, map[string]any{"error": err.Error()})
+			return
+		}
+		s.writeProxyAPIResponse(w, format, uris, resp)
+		return
+	}
+
+	healthyDefault := mode == "random"
+	healthy := parseBoolDefault(q.Get("healthy"), healthyDefault)
+	country := strings.ToLower(strings.TrimSpace(q.Get("country")))
+	region := strings.ToLower(strings.TrimSpace(q.Get("region")))
+	proxyType := strings.ToLower(strings.TrimSpace(q.Get("proxy_type")))
+	name := strings.TrimSpace(q.Get("name"))
+	tag := strings.TrimSpace(q.Get("tag"))
+	portStr := strings.TrimSpace(q.Get("port"))
+
+	candidates := s.proxyCandidates(healthy, country, region, proxyType, name, tag, portStr)
+	if len(candidates) == 0 {
+		w.WriteHeader(http.StatusNotFound)
+		writeJSON(w, map[string]any{"error": "no matching runtime proxy, reload core or relax filters"})
+		return
+	}
+
+	var snap Snapshot
+	if mode == "random" {
+		idx := secureRandIndex(len(candidates))
+		snap = candidates[idx]
+	} else {
+		if name == "" && tag == "" && portStr == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			writeJSON(w, map[string]any{"error": "fixed mode requires name/tag/port"})
+			return
+		}
+		snap = candidates[0]
+	}
+
+	uris := s.snapshotProxyURIs(r, snap, scheme)
+	if len(uris) == 0 {
+		w.WriteHeader(http.StatusNotFound)
+		writeJSON(w, map[string]any{"error": "selected node has no listen address/port, reload core or enable multi-port/hybrid"})
+		return
+	}
+	resp := map[string]any{
+		"mode":    mode,
+		"scheme":  scheme,
+		"proxy":   firstProxyURI(uris),
+		"proxies": uris,
+		"node":    snap,
+	}
+	s.writeProxyAPIResponse(w, format, uris, resp)
+}
+
+func splitCSVFilter(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.ToLower(strings.TrimSpace(part))
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
+func matchesAnyFilter(value string, filters []string) bool {
+	if len(filters) == 0 {
+		return true
+	}
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, item := range filters {
+		if value == item {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) proxyCandidates(healthy bool, country, region, proxyType, name, tag, portStr string) []Snapshot {
+	snaps := s.mgr.SnapshotFiltered(healthy)
+	var port uint64
+	if portStr != "" {
+		port, _ = strconv.ParseUint(portStr, 10, 16)
+	}
+	countryFilters := splitCSVFilter(country)
+	regionFilters := splitCSVFilter(region)
+	out := make([]Snapshot, 0, len(snaps))
+	for _, snap := range snaps {
+		if snap.ListenAddress == "" || snap.Port == 0 {
+			continue
+		}
+		if len(countryFilters) > 0 && !matchesAnyFilter(snap.CountryCode, countryFilters) {
+			continue
+		}
+		if len(regionFilters) > 0 && !matchesAnyFilter(snap.Region, regionFilters) {
+			continue
+		}
+		if proxyType != "" && proxyType != "all" && strings.ToLower(snap.ProxyType) != proxyType {
+			continue
+		}
+		if name != "" && snap.Name != name {
+			continue
+		}
+		if tag != "" && snap.Tag != tag {
+			continue
+		}
+		if portStr != "" && uint16(port) != snap.Port {
+			continue
+		}
+		out = append(out, snap)
+	}
+	return out
+}
+
+func (s *Server) poolProxyURIs(r *http.Request, scheme string) ([]string, map[string]any, error) {
+	s.cfgMu.RLock()
+	var listenerCfg config.ListenerConfig
+	mode := ""
+	if s.cfgSrc != nil {
+		mode = s.cfgSrc.Mode
+		listenerCfg = s.cfgSrc.Listener
+	}
+	s.cfgMu.RUnlock()
+	if mode != "pool" && mode != "hybrid" {
+		return nil, nil, fmt.Errorf("pool entry is only available in pool/hybrid mode")
+	}
+	if listenerCfg.Port == 0 {
+		return nil, nil, fmt.Errorf("pool listener port is not configured")
+	}
+	addr := s.publicProxyAddress(r, listenerCfg.Address)
+	uris := buildProxyURIs(scheme, addr, listenerCfg.Port, listenerCfg.Username, listenerCfg.Password)
+	resp := map[string]any{
+		"mode":    "pool",
+		"scheme":  scheme,
+		"proxy":   firstProxyURI(uris),
+		"proxies": uris,
+		"pool": map[string]any{
+			"address": addr,
+			"port":    listenerCfg.Port,
+		},
+	}
+	return uris, resp, nil
+}
+
+func (s *Server) snapshotProxyURIs(r *http.Request, snap Snapshot, scheme string) []string {
+	addr := s.publicProxyAddress(r, snap.ListenAddress)
+	return buildProxyURIs(scheme, addr, snap.Port, s.cfg.ProxyUsername, s.cfg.ProxyPassword)
+}
+
+func buildProxyURIs(scheme, addr string, port uint16, username, password string) []string {
+	if addr == "" || port == 0 {
+		return nil
+	}
+	mk := func(sc string) string {
+		u := url.URL{Scheme: sc, Host: net.JoinHostPort(addr, strconv.Itoa(int(port)))}
+		if username != "" || password != "" {
+			u.User = url.UserPassword(username, password)
+		}
+		return u.String()
+	}
+	switch scheme {
+	case "all":
+		return []string{mk("http"), mk("socks5")}
+	case "socks5":
+		return []string{mk("socks5")}
+	default:
+		return []string{mk("http")}
+	}
+}
+
+func (s *Server) publicProxyAddress(r *http.Request, addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" || addr == "0.0.0.0" || addr == "::" || addr == "[::]" {
+		if extIP, _, _, _ := s.getSettings(); strings.TrimSpace(extIP) != "" {
+			return strings.Trim(strings.TrimSpace(extIP), "[]")
+		}
+		host := strings.TrimSpace(r.Host)
+		if h, _, err := net.SplitHostPort(host); err == nil && h != "" {
+			return strings.Trim(h, "[]")
+		}
+		if i := strings.LastIndex(host, ":"); i > 0 && !strings.Contains(host[:i], ":") {
+			host = host[:i]
+		}
+		host = strings.Trim(host, "[]")
+		if host != "" {
+			return host
+		}
+	}
+	return strings.Trim(addr, "[]")
+}
+
+func (s *Server) writeProxyAPIResponse(w http.ResponseWriter, format string, uris []string, resp map[string]any) {
+	if format == "json" {
+		writeJSON(w, resp)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(strings.Join(uris, "\n")))
+}
+
+func firstProxyURI(uris []string) string {
+	if len(uris) == 0 {
+		return ""
+	}
+	return uris[0]
+}
+
+func parseBoolDefault(raw string, def bool) bool {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return def
+	}
+	switch raw {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
+}
+
+func secureRandIndex(n int) int {
+	if n <= 1 {
+		return 0
+	}
+	v, err := rand.Int(rand.Reader, big.NewInt(int64(n)))
+	if err != nil {
+		return int(time.Now().UnixNano() % int64(n))
+	}
+	return int(v.Int64())
+}
+
 // handleSettings handles GET/PUT for dynamic settings (external_ip, probe_target, skip_cert_verify, log).
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -856,9 +1551,18 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 				"failure_threshold":  cfg.Pool.FailureThreshold,
 				"blacklist_duration": cfg.Pool.BlacklistDuration.String(),
 			}
+			qualityEnabled := true
+			if cfg.Management.QualityEnabled != nil {
+				qualityEnabled = *cfg.Management.QualityEnabled
+			}
 			resp["management"] = map[string]any{
-				"listen":   cfg.Management.Listen,
-				"password": cfg.Management.Password,
+				"listen":                cfg.Management.Listen,
+				"health_check_interval": cfg.Management.HealthCheckInterval.String(),
+				"api_key":               cfg.Management.APIKey,
+				"quality_enabled":       qualityEnabled,
+				"quality_provider":      cfg.Management.QualityProvider,
+				"quality_api_key":       cfg.Management.QualityAPIKey,
+				"quality_cache_ttl":     cfg.Management.QualityCacheTTL.String(),
 			}
 			resp["geoip"] = map[string]any{
 				"enabled":              cfg.GeoIP.Enabled,
@@ -894,8 +1598,13 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 				BlacklistDuration string `json:"blacklist_duration"`
 			} `json:"pool,omitempty"`
 			Management *struct {
-				Listen   string `json:"listen"`
-				Password string `json:"password"`
+				Listen              string `json:"listen"`
+				HealthCheckInterval string `json:"health_check_interval"`
+				APIKey              string `json:"api_key"`
+				QualityEnabled      bool   `json:"quality_enabled"`
+				QualityProvider     string `json:"quality_provider"`
+				QualityAPIKey       string `json:"quality_api_key"`
+				QualityCacheTTL     string `json:"quality_cache_ttl"`
 			} `json:"management,omitempty"`
 			Log *struct {
 				Output     string `json:"output"`
@@ -939,7 +1648,6 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-
 		// Update extended settings
 		s.cfgMu.Lock()
 		if s.cfgSrc != nil {
@@ -969,7 +1677,34 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			}
 			if req.Management != nil {
 				s.cfgSrc.Management.Listen = req.Management.Listen
-				s.cfgSrc.Management.Password = req.Management.Password
+				if req.Management.HealthCheckInterval != "" {
+					if d, err := time.ParseDuration(req.Management.HealthCheckInterval); err == nil && d > 0 {
+						s.cfgSrc.Management.HealthCheckInterval = d
+						s.cfg.HealthCheckInterval = d
+					}
+				}
+				keyValue := strings.TrimSpace(req.Management.APIKey)
+				s.cfgSrc.Management.APIKey = keyValue
+				s.cfgSrc.Management.Password = ""
+				s.cfgSrc.Management.QualityEnabled = &req.Management.QualityEnabled
+				s.cfgSrc.Management.QualityProvider = strings.TrimSpace(req.Management.QualityProvider)
+				s.cfgSrc.Management.QualityAPIKey = strings.TrimSpace(req.Management.QualityAPIKey)
+				qualityCacheTTL := s.cfgSrc.Management.QualityCacheTTL
+				if req.Management.QualityCacheTTL != "" {
+					if d, err := time.ParseDuration(req.Management.QualityCacheTTL); err == nil && d > 0 {
+						qualityCacheTTL = d
+						s.cfgSrc.Management.QualityCacheTTL = d
+					}
+				}
+				s.cfg.Password = ""
+				s.cfg.APIKey = keyValue
+				s.cfg.QualityEnabled = req.Management.QualityEnabled
+				s.cfg.QualityProvider = s.cfgSrc.Management.QualityProvider
+				s.cfg.QualityAPIKey = s.cfgSrc.Management.QualityAPIKey
+				s.cfg.QualityCacheTTL = qualityCacheTTL
+				if s.mgr != nil {
+					s.mgr.SetQualityConfig(req.Management.QualityEnabled, s.cfgSrc.Management.QualityProvider, s.cfgSrc.Management.QualityAPIKey, qualityCacheTTL)
+				}
 			}
 			if req.GeoIP != nil {
 				s.cfgSrc.GeoIP.DatabasePath = req.GeoIP.DatabasePath
@@ -1130,7 +1865,10 @@ func (s *Server) handleSubscriptionConfig(w http.ResponseWriter, r *http.Request
 			}
 		}
 
-		status := s.subRefresher.Status()
+		status := SubscriptionStatus{}
+		if s.subRefresher != nil {
+			status = s.subRefresher.Status()
+		}
 		writeJSON(w, map[string]any{
 			"message":       "订阅配置已更新并生效",
 			"subscriptions": cleanURLs,
@@ -1151,6 +1889,42 @@ type nodePayload struct {
 	Port     uint16 `json:"port"`
 	Username string `json:"username"`
 	Password string `json:"password"`
+}
+
+type configNodeRuntimeSummary struct {
+	Tag              string `json:"tag,omitempty"`
+	Available        bool   `json:"available"`
+	InitialCheckDone bool   `json:"initial_check_done"`
+	Blacklisted      bool   `json:"blacklisted"`
+	FailureCount     int    `json:"failure_count"`
+	LastLatencyMs    int64  `json:"last_latency_ms"`
+	Region           string `json:"region,omitempty"`
+	CountryCode      string `json:"country_code,omitempty"`
+	Country          string `json:"country,omitempty"`
+	ExitIP           string `json:"exit_ip,omitempty"`
+	ProxyType        string `json:"proxy_type,omitempty"`
+	IPValid          bool   `json:"ip_valid"`
+	QualityError     string `json:"quality_error,omitempty"`
+	ActiveConns      int32  `json:"active_connections"`
+	UploadBytes      int64  `json:"upload_bytes"`
+	DownloadBytes    int64  `json:"download_bytes"`
+	ISP              string `json:"isp,omitempty"`
+	ASN              string `json:"asn,omitempty"`
+	ASName           string `json:"as_name,omitempty"`
+	IPVersion        string `json:"ip_version,omitempty"`
+	IPType           string `json:"ip_type,omitempty"`
+	IPInvalidReason  string `json:"ip_invalid_reason,omitempty"`
+	Mobile           bool   `json:"mobile,omitempty"`
+	Hosting          bool   `json:"hosting,omitempty"`
+	Proxy            bool   `json:"proxy,omitempty"`
+}
+
+type configNodeView struct {
+	config.NodeConfig
+	Runtime      *configNodeRuntimeSummary `json:"runtime,omitempty"`
+	RuntimeState string                    `json:"runtime_state,omitempty"` // healthy / unhealthy / blacklisted / unknown
+	ConnectHTTP  string                    `json:"connect_http,omitempty"`
+	ConnectSocks string                    `json:"connect_socks,omitempty"`
 }
 
 func (p nodePayload) toConfig() config.NodeConfig {
@@ -1176,7 +1950,222 @@ func (s *Server) handleConfigNodes(w http.ResponseWriter, r *http.Request) {
 			s.respondNodeError(w, err)
 			return
 		}
-		writeJSON(w, map[string]any{"nodes": nodes})
+		page := 1
+		if v, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page"))); err == nil && v > 0 {
+			page = v
+		}
+		pageSize := 20
+		if v, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page_size"))); err == nil && v > 0 {
+			if v > 200 {
+				v = 200
+			}
+			pageSize = v
+		}
+		keyword := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("keyword")))
+		source := strings.TrimSpace(r.URL.Query().Get("source"))
+		statusFilter := strings.TrimSpace(r.URL.Query().Get("status"))
+		if statusFilter == "" {
+			statusFilter = "all"
+		}
+
+		s.cfgMu.RLock()
+		var cfgCopy *config.Config
+		if s.cfgSrc != nil {
+			tmp := *s.cfgSrc
+			cfgCopy = &tmp
+		}
+		s.cfgMu.RUnlock()
+		externalIP, _, _, _ := s.getSettings()
+
+		snapshots := s.mgr.Snapshot()
+		byURI := make(map[string]Snapshot, len(snapshots))
+		byName := make(map[string]Snapshot, len(snapshots))
+		for _, snap := range snapshots {
+			if snap.URI != "" {
+				byURI[snap.URI] = snap
+			}
+			if snap.Name != "" {
+				byName[snap.Name] = snap
+			}
+		}
+
+		trafficMap := make(map[string][2]int64)
+		if s.trafficFn != nil {
+			trafficMap = s.trafficFn()
+		}
+
+		filtered := make([]configNodeView, 0, len(nodes))
+		hasSubscriptionNodes := false
+		for _, node := range nodes {
+			if node.Source == config.NodeSourceSubscription {
+				hasSubscriptionNodes = true
+			}
+			if source != "" && source != "all" && string(node.Source) != source {
+				continue
+			}
+			if keyword != "" {
+				text := strings.ToLower(strings.Join([]string{node.Name, node.URI, string(node.Source)}, " "))
+				if !strings.Contains(text, keyword) {
+					continue
+				}
+			}
+			view := configNodeView{NodeConfig: node, RuntimeState: "unknown"}
+			var snap Snapshot
+			var ok bool
+			if node.URI != "" {
+				snap, ok = byURI[node.URI]
+			}
+			if !ok && node.Name != "" {
+				snap, ok = byName[node.Name]
+			}
+			if cfgCopy != nil && node.Port > 0 && (cfgCopy.Mode == "hybrid" || cfgCopy.Mode == "multi-port" || cfgCopy.Mode == "") {
+				listenAddr := cfgCopy.MultiPort.Address
+				if listenAddr == "" || listenAddr == "0.0.0.0" || listenAddr == "::" {
+					if externalIP != "" {
+						listenAddr = externalIP
+					}
+				}
+				if listenAddr != "" {
+					var authPart string
+					if cfgCopy.MultiPort.Username != "" && cfgCopy.MultiPort.Password != "" {
+						authPart = fmt.Sprintf("%s:%s@", cfgCopy.MultiPort.Username, cfgCopy.MultiPort.Password)
+					}
+					view.ConnectHTTP = fmt.Sprintf("http://%s%s:%d", authPart, listenAddr, node.Port)
+					view.ConnectSocks = fmt.Sprintf("socks5://%s%s:%d", authPart, listenAddr, node.Port)
+				}
+			}
+			if ok {
+				view.Runtime = &configNodeRuntimeSummary{
+					Tag:              snap.Tag,
+					Available:        snap.Available,
+					InitialCheckDone: snap.InitialCheckDone,
+					Blacklisted:      snap.Blacklisted,
+					FailureCount:     snap.FailureCount,
+					LastLatencyMs:    snap.LastLatencyMs,
+					ExitIP:           snap.ExitIP,
+					ProxyType:        snap.ProxyType,
+					IPValid:          snap.IPValid,
+					QualityError:     snap.Error,
+					Region:           snap.Region,
+					ActiveConns:      snap.ActiveConnections,
+					ISP:              snap.ISP,
+					ASN:              snap.ASN,
+					ASName:           snap.ASName,
+					IPVersion:        snap.IPVersion,
+					IPType:           snap.IPType,
+					IPInvalidReason:  snap.IPInvalidReason,
+					Mobile:           snap.Mobile,
+					Hosting:          snap.Hosting,
+					Proxy:            snap.Proxy,
+				}
+				if tag := snap.Tag; tag != "" {
+					if td, found := trafficMap[tag]; found {
+						view.Runtime.UploadBytes = td[0]
+						view.Runtime.DownloadBytes = td[1]
+					}
+				}
+				view.Runtime = &configNodeRuntimeSummary{
+					Tag:              snap.Tag,
+					Available:        snap.Available,
+					InitialCheckDone: snap.InitialCheckDone,
+					Blacklisted:      snap.Blacklisted,
+					FailureCount:     snap.FailureCount,
+					LastLatencyMs:    snap.LastLatencyMs,
+					Region:           snap.NodeInfo.Region,
+					CountryCode:      snap.QualityInfo.CountryCode,
+					Country:          snap.QualityInfo.Country,
+					ExitIP:           snap.ExitIP,
+					ProxyType:        snap.ProxyType,
+					IPValid:          snap.IPValid,
+					QualityError:     snap.Error,
+					ActiveConns:      snap.ActiveConnections,
+					ISP:              snap.ISP,
+					ASN:              snap.ASN,
+					ASName:           snap.ASName,
+					IPVersion:        snap.IPVersion,
+					IPType:           snap.IPType,
+					IPInvalidReason:  snap.IPInvalidReason,
+					Mobile:           snap.Mobile,
+					Hosting:          snap.Hosting,
+					Proxy:            snap.Proxy,
+				}
+				if tag := snap.Tag; tag != "" {
+					if td, found := trafficMap[tag]; found {
+						view.Runtime.UploadBytes = td[0]
+						view.Runtime.DownloadBytes = td[1]
+					}
+				}
+				switch {
+				case snap.Blacklisted:
+					view.RuntimeState = "blacklisted"
+				case snap.InitialCheckDone && !snap.Available:
+					view.RuntimeState = "unhealthy"
+				case snap.InitialCheckDone && snap.Available:
+					view.RuntimeState = "healthy"
+				default:
+					view.RuntimeState = "unknown"
+				}
+			}
+			switch statusFilter {
+			case "healthy":
+				if view.RuntimeState != "healthy" {
+					continue
+				}
+			case "unhealthy":
+				if view.RuntimeState != "unhealthy" && view.RuntimeState != "blacklisted" {
+					continue
+				}
+			case "unknown":
+				if view.RuntimeState != "unknown" {
+					continue
+				}
+			}
+			filtered = append(filtered, view)
+		}
+
+		total := len(filtered)
+		totalPages := 0
+		if total > 0 {
+			totalPages = (total + pageSize - 1) / pageSize
+		}
+		if totalPages == 0 {
+			page = 1
+		} else if page > totalPages {
+			page = totalPages
+		}
+
+		start := 0
+		end := 0
+		if total > 0 {
+			start = (page - 1) * pageSize
+			if start < 0 {
+				start = 0
+			}
+			if start > total {
+				start = total
+			}
+			end = start + pageSize
+			if end > total {
+				end = total
+			}
+		}
+
+		pageNodes := []configNodeView{}
+		if total > 0 && start < end {
+			pageNodes = filtered[start:end]
+		}
+
+		writeJSON(w, map[string]any{
+			"nodes":                  pageNodes,
+			"total":                  total,
+			"page":                   page,
+			"page_size":              pageSize,
+			"total_pages":            totalPages,
+			"keyword":                keyword,
+			"source":                 source,
+			"status":                 statusFilter,
+			"has_subscription_nodes": hasSubscriptionNodes,
+		})
 	case http.MethodPost:
 		var payload nodePayload
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {

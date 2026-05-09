@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════
-# Easy Proxies 完整配置文件
+# ProxyWeave 完整配置文件
 # ═══════════════════════════════════════════════════════════════
 
 # ───────────────────────────────────────────────────────────────
@@ -17,14 +17,14 @@ log_level: info
 # 日志轮转配置
 # ───────────────────────────────────────────────────────────────
 # output: "stdout"（仅控制台）或 "file"（控制台+文件轮转），默认 stdout
-# file: 日志文件路径，默认 logs/easy_proxies.log
+# file: 日志文件路径，默认 logs/proxyweave.log
 # max_size: 单个日志文件最大 MB，超出后自动轮转，默认 50
 # max_backups: 保留旧日志文件个数，默认 3
 # max_age: 保留旧日志文件天数，默认 7
 # compress: 是否压缩轮转后的旧日志，默认 false
 log:
   output: stdout
-  file: logs/easy_proxies.log
+  file: logs/proxyweave.log
   max_size: 50
   max_backups: 3
   max_age: 7
@@ -72,7 +72,13 @@ management:
   enabled: true                                      # 是否启用管理面板
   listen: 0.0.0.0:9091                               # 监听地址
   probe_target: http://cp.cloudflare.com/generate_204  # 健康检查目标
+  health_check_interval: 5m                          # 周期健康检查间隔
   password: ""                                       # WebUI 访问密码，为空则不需要密码
+  api_key: ""                                        # API Key；支持 X-API-Key 或 Authorization: Bearer <key>
+  quality_enabled: true                              # 是否启用节点出口质量识别
+  quality_provider: ipinfo_dkly                     # ipinfo_dkly / auto / ip-api / ipinfo_lite / off
+  quality_api_key: ""                                # 质量 API Key（dkly / IPinfo Lite 使用）
+  quality_cache_ttl: 168h                            # 出口 IP/ASN/ISP/类型缓存时间（默认 7 天）
 
 # ───────────────────────────────────────────────────────────────
 # DNS 配置（用于节点域名解析，尤其是 VMess）
@@ -88,7 +94,7 @@ dns:
 # ───────────────────────────────────────────────────────────────
 # GeoIP 地域分区配置（可选）
 # ───────────────────────────────────────────────────────────────
-# 启用后会为节点打上地域标签（jp/kr/us/hk/tw/other），用于 WebUI 统计和筛选。
+# 启用后会为节点打上国家/地区标签（如 jp/us/de/sg，未知为 other），用于 WebUI 统计和筛选。
 geoip:
   enabled: true                      # 是否启用 GeoIP 地域标记
   database_path: "./GeoLite2-Country.mmdb"           # GeoIP 数据库路径（首次启动时自动下载）
@@ -109,6 +115,7 @@ geoip:
 #   health_check_timeout: 60s   # 新节点健康检查超时
 #   drain_timeout: 30s          # 旧实例排空超时时间
 #   min_available_nodes: 1      # 最少可用节点数，低于此值不切换
+#   startup_health_check: never # 启动时健康检查：always / never / auto
 
 # ═══════════════════════════════════════════════════════════════
 # 节点配置方式（三选一或混合使用）

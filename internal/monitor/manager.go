@@ -18,14 +18,20 @@ import (
 
 // Config mirrors user settings needed by the monitoring server.
 type Config struct {
-	Enabled        bool
-	Listen         string
-	ProbeTarget    string
-	Password       string
-	ProxyUsername  string // 代理池的用户名（用于导出）
-	ProxyPassword  string // 代理池的密码（用于导出）
-	ExternalIP     string // 外部 IP 地址，用于导出时替换 0.0.0.0
-	SkipCertVerify bool   // 全局跳过 SSL 证书验证
+	Enabled             bool
+	Listen              string
+	ProbeTarget         string
+	HealthCheckInterval time.Duration
+	Password            string
+	APIKey              string // WebUI/API key（用于 Header/Bearer 鉴权）
+	ProxyUsername       string // 代理池的用户名（用于导出）
+	ProxyPassword       string // 代理池的密码（用于导出）
+	ExternalIP          string // 外部 IP 地址，用于导出时替换 0.0.0.0
+	SkipCertVerify      bool   // 全局跳过 SSL 证书验证
+	QualityEnabled      bool
+	QualityProvider     string
+	QualityAPIKey       string
+	QualityCacheTTL     time.Duration
 }
 
 // NodeInfo is static metadata about a proxy entry.
@@ -36,8 +42,31 @@ type NodeInfo struct {
 	Mode          string `json:"mode"`
 	ListenAddress string `json:"listen_address,omitempty"`
 	Port          uint16 `json:"port,omitempty"`
-	Region        string `json:"region,omitempty"`  // GeoIP region code: "jp", "kr", "us", "hk", "tw", "other"
+	Region        string `json:"region,omitempty"`  // GeoIP region code: lowercase ISO country code (e.g. "jp", "us", "de"), fallback "other"
 	Country       string `json:"country,omitempty"` // Full country name from GeoIP
+}
+
+// QualityInfo describes the observed exit IP and coarse network type of a node.
+// The type is heuristic (based on ASN/ISP/provider flags), not a guaranteed truth.
+type QualityInfo struct {
+	ExitIP          string    `json:"exit_ip,omitempty"`
+	IPValid         bool      `json:"ip_valid"`
+	IPVersion       string    `json:"ip_version,omitempty"` // ipv4 / ipv6
+	IPType          string    `json:"ip_type,omitempty"`    // public/private/loopback/link_local/multicast/reserved/invalid/unknown
+	IPInvalidReason string    `json:"ip_invalid_reason,omitempty"`
+	CountryCode     string    `json:"country_code,omitempty"`
+	Country         string    `json:"country,omitempty"`
+	ASN             string    `json:"asn,omitempty"`
+	ASName          string    `json:"as_name,omitempty"`
+	ISP             string    `json:"isp,omitempty"`
+	Org             string    `json:"org,omitempty"`
+	ProxyType       string    `json:"proxy_type,omitempty"` // isp/datacenter/mobile/unknown
+	QualitySource   string    `json:"quality_source,omitempty"`
+	Mobile          bool      `json:"mobile,omitempty"`
+	Hosting         bool      `json:"hosting,omitempty"`
+	Proxy           bool      `json:"proxy,omitempty"`
+	CheckedAt       time.Time `json:"quality_checked_at,omitempty"`
+	Error           string    `json:"quality_error,omitempty"`
 }
 
 // TimelineEvent represents a single usage event for debug tracking.
@@ -66,9 +95,11 @@ type Snapshot struct {
 	Available         bool            `json:"available"`
 	InitialCheckDone  bool            `json:"initial_check_done"`
 	Timeline          []TimelineEvent `json:"timeline,omitempty"`
+	QualityInfo
 }
 
 type probeFunc func(ctx context.Context) (time.Duration, error)
+type qualityFunc func(ctx context.Context) (QualityInfo, error)
 type releaseFunc func()
 
 type EntryHandle struct {
@@ -88,10 +119,14 @@ type entry struct {
 	lastProbe        time.Duration
 	active           atomic.Int32
 	probe            probeFunc
+	qualityProbe     qualityFunc
 	release          releaseFunc
 	blacklistFn      func(time.Duration)
 	initialCheckDone bool
 	available        bool
+	quality          QualityInfo
+	qualityChecking  bool
+	qualityAttempt   time.Time
 	mu               sync.RWMutex
 }
 
@@ -152,6 +187,46 @@ func NewManager(cfg Config) (*Manager, error) {
 	return m, nil
 }
 
+// QualityConfig returns exit-IP quality lookup settings.
+func (m *Manager) QualityConfig() (enabled bool, provider string, apiKey string, cacheTTL time.Duration) {
+	if m == nil {
+		return false, "off", "", 0
+	}
+	m.mu.RLock()
+	cfg := m.cfg
+	m.mu.RUnlock()
+	provider = strings.ToLower(strings.TrimSpace(cfg.QualityProvider))
+	if provider == "" {
+		provider = "auto"
+	}
+	if provider == "off" || provider == "none" || provider == "disabled" {
+		return false, provider, cfg.QualityAPIKey, cfg.QualityCacheTTL
+	}
+	if cfg.QualityCacheTTL <= 0 {
+		cfg.QualityCacheTTL = 7 * 24 * time.Hour
+	}
+	return cfg.QualityEnabled, provider, cfg.QualityAPIKey, cfg.QualityCacheTTL
+}
+
+// SetQualityConfig updates exit-IP quality lookup settings at runtime.
+func (m *Manager) SetQualityConfig(enabled bool, provider, apiKey string, cacheTTL time.Duration) {
+	if m == nil {
+		return
+	}
+	if strings.TrimSpace(provider) == "" {
+		provider = "auto"
+	}
+	if cacheTTL <= 0 {
+		cacheTTL = 7 * 24 * time.Hour
+	}
+	m.mu.Lock()
+	m.cfg.QualityEnabled = enabled
+	m.cfg.QualityProvider = strings.ToLower(strings.TrimSpace(provider))
+	m.cfg.QualityAPIKey = apiKey
+	m.cfg.QualityCacheTTL = cacheTTL
+	m.mu.Unlock()
+}
+
 // SetLogger sets the logger for the manager.
 func (m *Manager) SetLogger(logger Logger) {
 	m.logger = logger
@@ -167,11 +242,14 @@ func (m *Manager) StartPeriodicHealthCheck(interval, timeout time.Duration) {
 		}
 		return
 	}
+	if interval <= 0 {
+		if m.logger != nil {
+			m.logger.Info("periodic health check disabled")
+		}
+		return
+	}
 
 	go func() {
-		// 启动后立即进行一次检查
-		m.probeAllNodes(timeout)
-
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
@@ -296,6 +374,11 @@ func (m *Manager) Register(info NodeInfo) *EntryHandle {
 		}
 		m.nodes[info.Tag] = e
 	} else {
+		if e.info.URI != "" && info.URI != "" && e.info.URI != info.URI {
+			e.quality = QualityInfo{}
+			e.qualityAttempt = time.Time{}
+			e.qualityChecking = false
+		}
 		e.info = info
 	}
 	return &EntryHandle{ref: e}
@@ -383,6 +466,38 @@ func (m *Manager) Probe(ctx context.Context, tag string) (time.Duration, error) 
 	return latency, nil
 }
 
+// Quality triggers an exit-IP/ASN quality lookup for a node.
+func (m *Manager) Quality(ctx context.Context, tag string, force bool) (QualityInfo, error) {
+	e, err := m.entry(tag)
+	if err != nil {
+		return QualityInfo{}, err
+	}
+	e.mu.RLock()
+	fn := e.qualityProbe
+	cached := e.quality
+	e.mu.RUnlock()
+	if fn == nil {
+		return QualityInfo{}, errors.New("quality probe not available for this node")
+	}
+	enabled, _, _, cacheTTL := m.QualityConfig()
+	if !enabled {
+		return QualityInfo{}, errors.New("quality probe is disabled")
+	}
+	h := &EntryHandle{ref: e}
+	if !h.BeginQualityProbe(cacheTTL, force) {
+		if !force && !cached.CheckedAt.IsZero() {
+			return cached, nil
+		}
+		return cached, errors.New("quality probe is already running or cached")
+	}
+	info, err := fn(ctx)
+	h.FinishQualityProbe(info, err)
+	if err != nil {
+		return QualityInfo{}, err
+	}
+	return info, nil
+}
+
 // Release clears blacklist state for the given node.
 func (m *Manager) Release(tag string) error {
 	e, err := m.entry(tag)
@@ -458,6 +573,7 @@ func (e *entry) snapshot() Snapshot {
 		Available:         e.available,
 		InitialCheckDone:  e.initialCheckDone,
 		Timeline:          timelineCopy,
+		QualityInfo:       e.quality,
 	}
 }
 
@@ -535,6 +651,12 @@ func (e *entry) setProbe(fn probeFunc) {
 	e.probe = fn
 }
 
+func (e *entry) setQualityProbe(fn qualityFunc) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.qualityProbe = fn
+}
+
 func (e *entry) setRelease(fn releaseFunc) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -545,6 +667,54 @@ func (e *entry) recordProbeLatency(d time.Duration) {
 	e.mu.Lock()
 	e.lastProbe = d
 	e.mu.Unlock()
+}
+
+// BeginQualityProbe reserves a quality lookup slot for this node.
+// It returns false when a lookup is already running or the cached result is still fresh.
+func (h *EntryHandle) BeginQualityProbe(interval time.Duration, force bool) bool {
+	if h == nil || h.ref == nil {
+		return false
+	}
+	if interval <= 0 {
+		interval = 7 * 24 * time.Hour
+	}
+	now := time.Now()
+	h.ref.mu.Lock()
+	defer h.ref.mu.Unlock()
+	if h.ref.qualityChecking {
+		return false
+	}
+	last := h.ref.qualityAttempt
+	if h.ref.quality.CheckedAt.After(last) {
+		last = h.ref.quality.CheckedAt
+	}
+	if !force && !last.IsZero() && now.Sub(last) < interval {
+		return false
+	}
+	h.ref.qualityChecking = true
+	h.ref.qualityAttempt = now
+	return true
+}
+
+// FinishQualityProbe stores the result of an exit-IP/ASN quality lookup.
+func (h *EntryHandle) FinishQualityProbe(info QualityInfo, err error) {
+	if h == nil || h.ref == nil {
+		return
+	}
+	h.ref.mu.Lock()
+	defer h.ref.mu.Unlock()
+	h.ref.qualityChecking = false
+	if err != nil {
+		h.ref.quality.Error = err.Error()
+		return
+	}
+	if info.CheckedAt.IsZero() {
+		info.CheckedAt = time.Now()
+	}
+	if info.ProxyType == "" {
+		info.ProxyType = "unknown"
+	}
+	h.ref.quality = info
 }
 
 // RecordFailure updates failure counters.
@@ -609,6 +779,14 @@ func (h *EntryHandle) SetProbe(fn func(ctx context.Context) (time.Duration, erro
 		return
 	}
 	h.ref.setProbe(fn)
+}
+
+// SetQualityProbe assigns an exit-IP/ASN quality probe function.
+func (h *EntryHandle) SetQualityProbe(fn func(ctx context.Context) (QualityInfo, error)) {
+	if h == nil || h.ref == nil {
+		return
+	}
+	h.ref.setQualityProbe(fn)
 }
 
 // SetRelease assigns a release function.

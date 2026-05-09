@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Easy Proxies - 监控中心</title>
+  <title>ProxyWeave - 监控中心</title>
   <style>
     :root {
       /* Dark Theme (Default) */
@@ -42,18 +42,26 @@
       --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
       --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
     }
+    :root {
+      --overlay-bg: rgba(15, 23, 42, 0.62);
+      --overlay-card-shadow: 0 8px 32px rgba(0, 0, 0, 0.28);
+    }
+    [data-theme="light"] {
+      --overlay-bg: rgba(15, 23, 42, 0.12);
+      --overlay-card-shadow: 0 8px 32px rgba(15, 23, 42, 0.12);
+    }
 
     /* Minimalist Scrollbar */
     ::-webkit-scrollbar {
-      width: 8px;
-      height: 8px;
+      width: 6px;
+      height: 6px;
     }
     ::-webkit-scrollbar-track {
       background: transparent;
     }
     ::-webkit-scrollbar-thumb {
       background: var(--border);
-      border-radius: 4px;
+      border-radius: 3px;
     }
     ::-webkit-scrollbar-thumb:hover {
       background: var(--text-muted);
@@ -68,6 +76,15 @@
       height: 100vh;
       overflow: hidden;
     }
+    body.auth-pending .sidebar,
+    body.auth-pending .main {
+      visibility: hidden;
+      pointer-events: none;
+    }
+    body.auth-required .sidebar,
+    body.auth-required .main {
+      display: none;
+    }
     /* Layout */
     .sidebar {
       width: 240px;
@@ -77,15 +94,29 @@
       flex-direction: column;
       box-shadow: var(--shadow-sm);
       z-index: 10;
+      transition: width 0.22s ease;
+      overflow: hidden;
     }
     .brand {
       height: 60px;
       display: flex;
       align-items: center;
+      justify-content: space-between;
       padding: 0 20px;
       font-size: 16px;
       font-weight: 700;
       gap: 10px;
+    }
+    .brand-title {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      overflow: hidden;
+    }
+    .brand-text {
+      white-space: nowrap;
+      transition: opacity 0.18s ease;
     }
     .brand-icon {
       width: 28px; height: 28px;
@@ -106,9 +137,99 @@
       color: var(--text-muted);
       cursor: pointer;
       transition: all 0.2s;
+      white-space: nowrap;
     }
     .nav-item:hover { background: rgba(100,100,100,0.05); color: var(--text-main); }
     .nav-item.active { background: rgba(59, 130, 246, 0.1); color: var(--primary); border-right: 3px solid var(--primary); }
+    .nav-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .sidebar-footer {
+      padding: 0 20px 16px;
+      text-align: center;
+    }
+    .sidebar-footer-link {
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      color:var(--text-muted);
+      text-decoration:none;
+      font-size:12px;
+      padding:6px 10px;
+      border-radius:6px;
+      border:1px solid var(--border);
+      transition:all 0.2s;
+      max-width: 100%;
+      overflow: hidden;
+    }
+    .sidebar-footer-link:hover {
+      border-color: var(--primary);
+      color: var(--text-main);
+    }
+    .sidebar-footer-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .sidebar-toggle {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg-input);
+      color: var(--text-muted);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      flex: 0 0 auto;
+    }
+    .sidebar-toggle:hover {
+      color: var(--text-main);
+      border-color: var(--primary);
+      background: var(--bg-hover);
+    }
+    .sidebar-toggle .svg-icon {
+      transition: transform 0.22s ease;
+    }
+    body.sidebar-collapsed .sidebar {
+      width: 76px;
+    }
+    body.sidebar-collapsed .brand {
+      padding: 0 12px;
+      justify-content: center;
+    }
+    body.sidebar-collapsed .brand-toggle {
+      display: none;
+    }
+    body.sidebar-collapsed .brand-text,
+    body.sidebar-collapsed .nav-text,
+    body.sidebar-collapsed .sidebar-footer-text {
+      opacity: 0;
+      width: 0;
+      pointer-events: none;
+    }
+    body.sidebar-collapsed .nav-item {
+      padding: 10px 0;
+      justify-content: center;
+      gap: 0;
+    }
+    body.sidebar-collapsed .nav-item.active {
+      border-right-width: 2px;
+    }
+    body.sidebar-collapsed .sidebar-footer {
+      padding: 0 12px 16px;
+    }
+    body.sidebar-collapsed .sidebar-footer-link {
+      justify-content: center;
+      padding: 8px;
+      width: 100%;
+    }
+    body.sidebar-collapsed #sidebarToggleBtn .svg-icon {
+      transform: rotate(180deg);
+    }
     
     .main {
       flex: 1;
@@ -183,6 +304,20 @@
       padding: 8px 12px; border-radius: 6px; font-family: var(--font-mono); font-size: 13px;
       outline: none; width: 100%; box-sizing: border-box; transition: border-color 0.2s;
     }
+    select.setting-input {
+      appearance: none;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      padding-right: 34px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      background-size: 14px 14px;
+      cursor: pointer;
+    }
+    [data-theme="light"] select.setting-input {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+    }
     .setting-input:focus { border-color: var(--primary); }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
@@ -198,11 +333,49 @@
       display: inline-flex; align-items: center; gap: 6px;
       transition: all 0.2s;
     }
-    .btn:hover { filter: brightness(1.1); }
+    .btn:hover {
+      background: var(--border);
+      border-color: var(--text-muted);
+      color: var(--text-main);
+      filter: none;
+    }
     .btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); color: #fff; }
     .btn-success { background: var(--success); border-color: var(--success); color: #fff; }
+    .btn-success:hover { background: #059669; border-color: #059669; color: #fff; }
     .btn-danger { background: var(--error); border-color: var(--error); color: #fff; }
+    .btn-danger:hover { background: #dc2626; border-color: #dc2626; color: #fff; }
+    .btn-warning { background: var(--warning); border-color: var(--warning); color: #111827; }
+    .btn-warning:hover { background: #d97706; border-color: #d97706; color: #111827; }
     .btn-sm { padding: 4px 10px; font-size: 11px; }
+    .btn-compact { padding: 6px 12px; font-size: 12px; line-height: 1.2; white-space: nowrap; }
+    .svg-icon {
+      width: 14px;
+      height: 14px;
+      flex: 0 0 auto;
+      display: inline-block;
+      vertical-align: -2px;
+    }
+    .svg-icon.sm { width: 12px; height: 12px; }
+    .svg-icon.lg { width: 16px; height: 16px; }
+    .stat-title .svg-icon { margin-right: 6px; color: currentColor; }
+    .icon-warning { color: var(--warning); }
+    .region-cell { display: inline-flex; align-items: center; gap: 6px; }
+    .region-icon {
+      width: 18px;
+      height: 18px;
+      flex: 0 0 auto;
+      display: inline-block;
+      vertical-align: -4px;
+      filter: drop-shadow(0 1px 2px rgba(0,0,0,0.18));
+    }
+    .region-icon text {
+      fill: #fff;
+      font: 700 9px var(--font-ui);
+      text-anchor: middle;
+      dominant-baseline: central;
+      letter-spacing: -0.4px;
+    }
 
     /* Dashboard Grid */
     .overview-grid {
@@ -249,6 +422,102 @@
     .panel-title { font-size: 14px; font-weight: 600; }
     .table-container { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; text-align: left; }
+    .config-nodes-table {
+      width: max-content;
+      min-width: 1580px;
+      table-layout: auto;
+    }
+    .config-nodes-table th,
+    .config-nodes-table td {
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+    .config-nodes-table td.wrap-uri {
+      max-width: 340px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .config-nodes-table td.wrap-quality {
+      min-width: 220px;
+      white-space: normal;
+    }
+    .config-nodes-table td.wrap-connect {
+      min-width: 180px;
+      white-space: normal;
+    }
+    .config-nodes-table td.wrap-actions {
+      min-width: 300px;
+      white-space: normal;
+      position: relative;
+    }
+    .action-group {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .action-group .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .action-dropdown {
+      position: relative;
+      display: inline-flex;
+    }
+    .action-menu {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 6px);
+      min-width: 180px;
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: var(--shadow-md);
+      padding: 8px;
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      z-index: 30;
+    }
+    .action-dropdown.open .action-menu {
+      display: flex;
+    }
+    .action-menu .btn {
+      width: 100%;
+      justify-content: flex-start;
+    }
+    .api-docs-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+      padding: 16px;
+    }
+    .api-doc-item {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .api-doc-item h4 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      color: var(--text-main);
+    }
+    .api-doc-item p {
+      margin: 0 0 8px;
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+    .api-doc-code {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-all;
+      font-size: 12px;
+      line-height: 1.6;
+      color: var(--text-main);
+      font-family: var(--font-mono);
+    }
     th {
       padding: 12px 16px;
       color: var(--text-muted);
@@ -274,6 +543,8 @@
     .badge-offline { background: var(--bg-hover); color: var(--text-muted); border: 1px solid var(--border); }
 
     .tt-mono { font-family: var(--font-mono); font-size: 12px; }
+    .quality-cell { min-width: 170px; line-height: 1.5; }
+    .quality-meta { font-size: 11px; color: var(--text-muted); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     
     /* Progress Bar */
     .progress-wrapper { display: none; position: absolute; top: 0; left: 0; right: 0; z-index: 100; }
@@ -293,13 +564,38 @@
       display: none; align-items: center; justify-content: center; z-index: 1000;
     }
     .modal-overlay.show { display: flex; }
+    .modal-overlay.login-overlay {
+      background: var(--bg-base);
+      backdrop-filter: none;
+      z-index: 5000;
+    }
     .modal {
       background: var(--bg-panel); border: 1px solid var(--border);
       border-radius: 8px; width: 400px; box-shadow: var(--shadow-md);
     }
+    .modal.modal-wide { width: min(720px, calc(100vw - 32px)); }
     .modal-header { padding: 16px 24px; border-bottom: 1px solid var(--border); font-size: 16px; font-weight: 600; }
     .modal-body { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
     .modal-footer { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; }
+    .fullscreen-loading {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: var(--overlay-bg);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+    .fullscreen-loading.show { display: flex; }
+    .fullscreen-loading-card {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px 48px;
+      text-align: center;
+      box-shadow: var(--overlay-card-shadow);
+    }
     
     .form-group { display: flex; flex-direction: column; gap: 6px; }
     .checkbox-row {
@@ -318,12 +614,113 @@
       display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
       margin-bottom: 16px;
     }
+    .toolbar-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .pagination-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+    .collapse-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 12px;
+      user-select: none;
+    }
+    .collapse-toggle .arrow {
+      transition: transform 0.2s;
+      display: inline-block;
+    }
+    .collapse-toggle.expanded .arrow {
+      transform: rotate(90deg);
+    }
+    .collapsible-body {
+      display: none;
+    }
+    .collapsible-body.show {
+      display: block;
+    }
+    .mode-switch {
+      display: inline-flex;
+      gap: 8px;
+      padding: 4px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 8px;
+    }
+    .mode-switch button {
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .mode-switch button.active {
+      background: var(--primary);
+      color: #fff;
+    }
     label { font-size: 12px; color: var(--text-muted); }
     input[type="text"], input[type="password"], input[type="number"] {
       background: var(--bg-input); border: 1px solid var(--border); color: var(--text-main);
       padding: 8px 12px; border-radius: 6px; font-family: var(--font-mono); font-size: 13px; outline: none;
     }
+    input[type="password"]::-ms-reveal,
+    input[type="password"]::-ms-clear {
+      display: none;
+    }
     input:focus { border-color: var(--primary); }
+    .password-input-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .password-input-wrap input {
+      width: 100%;
+      padding-right: 40px;
+    }
+    .password-toggle {
+      position: absolute;
+      right: 8px;
+      width: 28px;
+      height: 28px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .password-toggle:hover {
+      background: var(--bg-hover);
+      color: var(--text-main);
+    }
+    .password-toggle .svg-icon {
+      width: 16px;
+      height: 16px;
+      vertical-align: 0;
+    }
     
     .region-filters { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
     .region-btn { padding: 4px 10px; border-radius: 4px; background: var(--bg-input); border: 1px solid var(--border); color: var(--text-muted); cursor: pointer; font-size: 12px; }
@@ -383,48 +780,149 @@
     })();
   </script>
 </head>
-<body>
+<body class="auth-pending">
+  <svg width="0" height="0" style="position:absolute; overflow:hidden;" aria-hidden="true" focusable="false">
+    <symbol id="i-zap" viewBox="0 0 24 24">
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></polygon>
+    </symbol>
+    <symbol id="i-search" viewBox="0 0 24 24">
+      <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"></circle>
+      <line x1="16.5" y1="16.5" x2="21" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+    </symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24">
+      <line x1="12" y1="5" x2="12" y2="19" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+      <line x1="5" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+    </symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24">
+      <polyline points="23 4 23 10 17 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+      <polyline points="1 20 1 14 7 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+    </symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24">
+      <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"></rect>
+    </symbol>
+    <symbol id="i-play" viewBox="0 0 24 24">
+      <polygon points="8 5 19 12 8 19 8 5" fill="currentColor"></polygon>
+    </symbol>
+    <symbol id="i-arrow-right" viewBox="0 0 24 24">
+      <polyline points="9 18 15 12 9 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+    </symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24">
+      <path d="M10.3 3.9 1.9 18a2 2 0 0 0 1.7 3h16.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></path>
+      <line x1="12" y1="9" x2="12" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+      <circle cx="12" cy="17" r="1" fill="currentColor"></circle>
+    </symbol>
+    <symbol id="i-arrow-up" viewBox="0 0 24 24">
+      <line x1="12" y1="19" x2="12" y2="5" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+      <polyline points="5 12 12 5 19 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+    </symbol>
+    <symbol id="i-arrow-down" viewBox="0 0 24 24">
+      <line x1="12" y1="5" x2="12" y2="19" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+      <polyline points="19 12 12 19 5 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+    </symbol>
+    <symbol id="i-panel-left" viewBox="0 0 24 24">
+      <rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"></rect>
+      <line x1="9" y1="4" x2="9" y2="20" stroke="currentColor" stroke-width="2"></line>
+      <polyline points="14 9 11 12 14 15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+    </symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24">
+      <path d="M12 20h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></path>
+    </symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24">
+      <polyline points="3 6 5 6 21 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+      <path d="M19 6l-1 14H6L5 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></path>
+      <path d="M10 11v6M14 11v6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+      <path d="M9 6V4h6v2" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></path>
+    </symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24">
+      <rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2"></rect>
+      <rect x="4" y="4" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="2"></rect>
+    </symbol>
+    <symbol id="i-ban" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"></circle>
+      <line x1="6" y1="18" x2="18" y2="6" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+    </symbol>
+    <symbol id="i-unlock" viewBox="0 0 24 24">
+      <rect x="4" y="11" width="16" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="2"></rect>
+      <path d="M8 11V8a4 4 0 0 1 7.4-2.1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+    </symbol>
+    <symbol id="i-link" viewBox="0 0 24 24">
+      <path d="M10 13a5 5 0 0 0 7.07 0l2.83-2.83a5 5 0 0 0-7.07-7.07L11 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+      <path d="M14 11a5 5 0 0 0-7.07 0L4.1 13.83a5 5 0 0 0 7.07 7.07L13 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+    </symbol>
+    <symbol id="i-chevron-left" viewBox="0 0 24 24">
+      <polyline points="15 18 9 12 15 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+    </symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24">
+      <polyline points="9 18 15 12 9 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+    </symbol>
+    <symbol id="i-more" viewBox="0 0 24 24">
+      <circle cx="5" cy="12" r="1.8" fill="currentColor"></circle>
+      <circle cx="12" cy="12" r="1.8" fill="currentColor"></circle>
+      <circle cx="19" cy="12" r="1.8" fill="currentColor"></circle>
+    </symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24">
+      <path d="M1.5 12s3.8-7 10.5-7 10.5 7 10.5 7-3.8 7-10.5 7S1.5 12 1.5 12z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"></path>
+      <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"></circle>
+    </symbol>
+    <symbol id="i-eye-off" viewBox="0 0 24 24">
+      <path d="M10.7 5.1A11 11 0 0 1 12 5c6.7 0 10.5 7 10.5 7a18.8 18.8 0 0 1-3 3.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+      <path d="M6.6 6.7A18.6 18.6 0 0 0 1.5 12s3.8 7 10.5 7a10.7 10.7 0 0 0 4.1-.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+      <path d="M9.9 9.9A3 3 0 0 0 12 15a3 3 0 0 0 2.1-.9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
+      <line x1="3" y1="3" x2="21" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+    </symbol>
+  </svg>
 
   <!-- Sidebar -->
   <aside class="sidebar">
     <div class="brand">
-      <div class="brand-icon">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-          <path d="M2 16l4-4 4 6 4-10 4 4 4-6" stroke="url(#brandGrad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <animate attributeName="stroke-dasharray" values="0,100;50,0;0,100" dur="3s" repeatCount="indefinite"/>
-          </path>
-          <defs><linearGradient id="brandGrad" x1="0" y1="0" x2="24" y2="0"><stop offset="0%" stop-color="#60a5fa"/><stop offset="100%" stop-color="#a78bfa"/></linearGradient></defs>
-        </svg>
+      <div class="brand-title">
+        <div class="brand-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M2 16l4-4 4 6 4-10 4 4 4-6" stroke="url(#brandGrad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <animate attributeName="stroke-dasharray" values="0,100;50,0;0,100" dur="3s" repeatCount="indefinite"/>
+            </path>
+            <defs><linearGradient id="brandGrad" x1="0" y1="0" x2="24" y2="0"><stop offset="0%" stop-color="#60a5fa"/><stop offset="100%" stop-color="#a78bfa"/></linearGradient></defs>
+          </svg>
+        </div>
+        <span class="brand-text">ProxyWeave</span>
       </div>
-      Easy Proxies
+      <button class="sidebar-toggle brand-toggle" type="button" onclick="toggleSidebar()" title="收起侧边栏">
+        <svg class="svg-icon" aria-hidden="true"><use href="#i-panel-left"></use></svg>
+      </button>
     </div>
     <div class="nav">
-      <div class="nav-item active" onclick="switchTab('dashboard')">
+      <div class="nav-item active" onclick="switchTab('dashboard')" title="监控看板">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
-        监控看板
+        <span class="nav-text">监控看板</span>
       </div>
-      <div class="nav-item" onclick="switchTab('manage')">
+      <div class="nav-item" onclick="switchTab('manage')" title="节点配置">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
-        节点配置
+        <span class="nav-text">节点配置</span>
       </div>
-      <div class="nav-item" onclick="switchTab('debug')">
+      <div class="nav-item" onclick="switchTab('debug')" title="诊断分析">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
-        诊断分析
+        <span class="nav-text">诊断分析</span>
       </div>
-      <div class="nav-item" onclick="switchTab('logs')">
+      <div class="nav-item" onclick="switchTab('logs')" title="控制台日志">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
-        控制台日志
+        <span class="nav-text">控制台日志</span>
       </div>
-      <div class="nav-item" onclick="switchTab('settings')">
+      <div class="nav-item" onclick="switchTab('api')" title="API 使用说明">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 18 22 12 16 6"></path><path d="M8 6 2 12 8 18"></path><line x1="14" y1="4" x2="10" y2="20"></line></svg>
+        <span class="nav-text">API 文档</span>
+      </div>
+      <div class="nav-item" onclick="switchTab('settings')" title="系统设置">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-        系统设置
+        <span class="nav-text">系统设置</span>
       </div>
     </div>
-    <div style="padding: 0 20px 16px; text-align: center;">
-      <a href="https://github.com/jasonwong1991/easy_proxies" target="_blank" rel="noopener" style="display:inline-flex; align-items:center; gap:6px; color:var(--text-muted); text-decoration:none; font-size:12px; padding:6px 10px; border-radius:6px; border:1px solid var(--border); transition:all 0.2s;" onmouseover="this.style.borderColor='var(--primary)';this.style.color='var(--text-main)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-muted)'">
+    <div class="sidebar-footer">
+      <a href="https://github.com/amberpepper/ProxyWeave" target="_blank" rel="noopener" class="sidebar-footer-link" title="GitHub 项目">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-        <span id="githubStars">-</span>
+        <span class="sidebar-footer-text" id="githubStars">-</span>
       </a>
     </div>
   </aside>
@@ -443,6 +941,9 @@
     <!-- Header -->
     <header class="header">
       <div class="header-left">
+        <button class="sidebar-toggle" id="sidebarToggleBtn" type="button" onclick="toggleSidebar()" title="收起侧边栏" aria-label="切换侧边栏">
+          <svg class="svg-icon" aria-hidden="true"><use href="#i-panel-left"></use></svg>
+        </button>
         <div class="status-indicator">
           <div class="status-dot"></div>
           <span id="lastUpdate">System Online</span>
@@ -455,11 +956,12 @@
           <svg class="icon-auto" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
           <span class="theme-mode-label" id="themeModeLabel">跟随系统</span>
         </button>
-        <button class="btn btn-primary" onclick="probeAllNodes()">⚡ 批量探测</button>
+        <button class="btn btn-warning" onclick="triggerReload()" id="reloadBtn"><svg class="svg-icon" aria-hidden="true"><use href="#i-zap"></use></svg>重载核心</button>
+        <button class="btn btn-primary" onclick="probeAllNodes()"><svg class="svg-icon" aria-hidden="true"><use href="#i-zap"></use></svg>批量探测</button>
+        <button class="btn" onclick="qualityAllNodes()"><svg class="svg-icon" aria-hidden="true"><use href="#i-search"></use></svg>批量质量检查</button>
         <button class="btn" id="refreshSubBtn" onclick="refreshSubscription()" style="display:none;">刷新订阅</button>
         <button class="btn" onclick="exportNodes()">导出配置</button>
-        <button class="btn" onclick="toggleAutoRefresh()" id="autoRefreshBtn">⏹ 关闭自动刷新</button>
-        <button class="btn" onclick="refresh()">↺ 刷新</button>
+        <button class="btn" onclick="refresh()"><svg class="svg-icon" aria-hidden="true"><use href="#i-refresh"></use></svg>刷新</button>
       </div>
     </header>
 
@@ -488,12 +990,12 @@
             <div class="stat-sub">不可用节点</div>
           </div>
           <div class="stat-panel">
-            <div class="stat-title">↑ 上行速率</div>
+            <div class="stat-title"><svg class="svg-icon sm" aria-hidden="true"><use href="#i-arrow-up"></use></svg>上行速率</div>
             <div class="stat-value" style="color: #3b82f6; font-size: 22px;" id="liveUpSpeed">0 B/s</div>
             <div class="stat-sub" style="color: var(--text-muted);">实时上传</div>
           </div>
           <div class="stat-panel">
-            <div class="stat-title">↓ 下行速率</div>
+            <div class="stat-title"><svg class="svg-icon sm" aria-hidden="true"><use href="#i-arrow-down"></use></svg>下行速率</div>
             <div class="stat-value" style="color: #10b981; font-size: 22px;" id="liveDownSpeed">0 B/s</div>
             <div class="stat-sub" style="color: var(--text-muted);">实时下载</div>
           </div>
@@ -514,21 +1016,20 @@
           </div>
         </div>
 
-        <div class="region-filters" id="regionFilter">
-          <span style="color: var(--text-muted); font-size: 12px; margin-top: 4px;">过滤:</span>
-          <button class="region-btn active" data-region="all" onclick="filterByRegion('all')">All</button>
-          <button class="region-btn" data-region="jp" onclick="filterByRegion('jp')">🇯🇵 JP</button>
-          <button class="region-btn" data-region="kr" onclick="filterByRegion('kr')">🇰🇷 KR</button>
-          <button class="region-btn" data-region="us" onclick="filterByRegion('us')">🇺🇸 US</button>
-          <button class="region-btn" data-region="hk" onclick="filterByRegion('hk')">🇭🇰 HK</button>
-          <button class="region-btn" data-region="tw" onclick="filterByRegion('tw')">🇹🇼 TW</button>
-          <button class="region-btn" data-region="sg" onclick="filterByRegion('sg')">🇸🇬 SG</button>
-          <button class="region-btn" data-region="other" onclick="filterByRegion('other')">Other</button>
-        </div>
-
         <div class="panel">
           <div class="panel-header">
-            <div class="panel-title">节点监控列表</div>
+            <div class="panel-title">代理列表查看</div>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <select id="monitorNodePageSize" class="setting-input" style="width:110px;">
+                <option value="10">10 / 页</option>
+                <option value="20" selected>20 / 页</option>
+                <option value="50">50 / 页</option>
+                <option value="100">100 / 页</option>
+              </select>
+              <button class="btn" id="monitorPrevBtn" onclick="changeMonitorNodesPage(-1)"><svg class="svg-icon" aria-hidden="true"><use href="#i-chevron-left"></use></svg>上一页</button>
+              <span id="monitorPageInfo" style="font-size:12px; color:var(--text-muted); min-width:110px; text-align:center;">第 1 / 1 页</span>
+              <button class="btn" id="monitorNextBtn" onclick="changeMonitorNodesPage(1)">下一页<svg class="svg-icon" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
+            </div>
           </div>
           <div class="table-container">
             <table>
@@ -536,21 +1037,23 @@
                 <tr>
                   <th>状态</th>
                   <th>地域</th>
-                  <th>名称 (Name/Tag)</th>
+                  <th>名称</th>
                   <th>端口</th>
-                  <th>延迟 / 质量</th>
+                  <th>延迟</th>
+                  <th>出口 / 类型</th>
                   <th>连接</th>
                   <th>失败</th>
-                  <th>操作</th>
                 </tr>
               </thead>
-              <tbody id="nodesTableBody">
-                <!-- Data rendered by JS -->
-              </tbody>
+              <tbody id="nodesTableBody"></tbody>
             </table>
             <div id="emptyState" style="display:none; text-align:center; padding: 40px; color: var(--text-muted);">暂无数据</div>
           </div>
+          <div class="pagination-bar" style="border-top:none;">
+            <div id="monitorTotalInfo">当前筛选共 0 条</div>
+          </div>
         </div>
+
       </div>
 
       <!-- Manage Tab -->
@@ -560,22 +1063,99 @@
             <h2 style="font-size: 18px; margin-bottom: 4px;">配置管理</h2>
             <p style="color: var(--text-muted); font-size: 12px;">修改配置后点击上方重载按钮生效</p>
           </div>
-          <div style="display:flex; gap: 10px;">
-            <button class="btn btn-primary" onclick="showAddNodeModal()">➕ 添加节点</button>
-            <button class="btn btn-warning" onclick="triggerReload()" id="reloadBtn" style="color:#000;">⚡ 重载核心</button>
+          <div style="display:flex; gap: 10px; align-items:center; flex-wrap:wrap;">
+            <button class="btn btn-primary btn-compact" onclick="showAddNodeModal()"><svg class="svg-icon" aria-hidden="true"><use href="#i-plus"></use></svg>添加节点</button>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-bottom: 16px;">
+          <div class="panel-header">
+            <div>
+              <div class="panel-title">订阅 / API / GitHub Raw 定时拉取</div>
+              <div id="manageSubSummary" style="font-size:12px; color:var(--text-muted); margin-top:4px;">未加载</div>
+            </div>
+            <div style="display:flex; gap:8px;">
+              <div class="collapse-toggle" id="manageSubToggle" onclick="toggleManageSubPanel()"><span class="arrow"><svg class="svg-icon sm" aria-hidden="true"><use href="#i-arrow-right"></use></svg></span><span id="manageSubToggleText">展开</span></div>
+              <button class="btn" onclick="refreshSubscription()">立即拉取</button>
+              <button class="btn btn-primary" onclick="saveManageSubscriptionConfig()">保存并拉取</button>
+            </div>
+          </div>
+          <div id="manageSubPanelBody" class="collapsible-body">
+          <div style="padding: 16px;">
+            <div class="checkbox-grid">
+              <div class="checkbox-row"><input type="checkbox" id="manageSubEnabled" /><label for="manageSubEnabled">启用定时拉取</label></div>
+            </div>
+            <div style="display: grid; grid-template-columns: 220px 1fr; gap: 16px; align-items: end;">
+              <div class="form-group">
+                <label>拉取间隔</label>
+                <select id="manageSubInterval" class="setting-input">
+                  <option value="10m">10 分钟</option><option value="30m">30 分钟</option>
+                  <option value="1h">1 小时</option><option value="3h">3 小时</option>
+                  <option value="6h">6 小时</option><option value="12h">12 小时</option>
+                  <option value="24h">24 小时</option>
+                </select>
+              </div>
+              <div id="manageSubStatus" style="font-size:12px; color:var(--text-muted); padding-bottom:8px;">未加载</div>
+            </div>
+            <div class="form-group" style="margin-top: 12px;">
+              <label>拉取 URL（每行一个，支持 API / GitHub Raw / 普通订阅）</label>
+              <textarea id="manageSubURLs" rows="4" class="setting-input" placeholder="https://api.example.com/proxies
+https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertical; font-size:12px;"></textarea>
+            </div>
+            <div style="font-size: 11px; color: var(--success); margin-top: 8px;">返回内容支持 Base64、纯文本节点列表（一行一个 URI）或 Clash YAML。开启定时拉取后会按间隔自动刷新并 reload。</div>
+          </div>
           </div>
         </div>
         
         <div id="subscriptionWarning" style="display:none; background: rgba(245, 158, 11, 0.1); border: 1px solid var(--warning); padding: 12px; border-radius: 6px; color: var(--warning); margin-bottom: 16px; font-size: 12px;">
-          ⚠️ 警告：当前使用订阅模式。手动修改配置将在下次订阅刷新时被覆盖。
+          <svg class="svg-icon icon-warning" aria-hidden="true"><use href="#i-alert"></use></svg> 警告：当前使用订阅模式。订阅节点会在下次定时拉取时更新；Web 手动添加的节点会保留。
         </div>
 
         <div class="panel">
+          <div class="toolbar-row">
+            <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+              <input type="text" id="configNodeKeyword" class="setting-input" placeholder="搜索名称 / URI" style="width:260px;" />
+              <input type="text" id="configNodeRegionFilter" class="setting-input" placeholder="地域，如 US / JP / TW" style="width:180px;" />
+              <select id="configNodeSourceFilter" class="setting-input" style="width:160px;">
+                <option value="all">全部来源</option>
+                <option value="inline">inline</option>
+                <option value="nodes_file">nodes_file</option>
+                <option value="subscription">subscription</option>
+              </select>
+              <select id="configNodeStatusFilter" class="setting-input" style="width:150px;">
+                <option value="all">全部状态</option>
+                <option value="healthy">仅有效</option>
+                <option value="unhealthy">仅失效</option>
+                <option value="unknown">未检测</option>
+              </select>
+              <select id="configNodePageSize" class="setting-input" style="width:110px;">
+                <option value="10">10 / 页</option>
+                <option value="20" selected>20 / 页</option>
+                <option value="50">50 / 页</option>
+                <option value="100">100 / 页</option>
+              </select>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <button class="btn" onclick="searchConfigNodes()"><svg class="svg-icon" aria-hidden="true"><use href="#i-search"></use></svg>搜索</button>
+              <button class="btn btn-danger" onclick="deleteUnhealthyConfigNodes()"><svg class="svg-icon" aria-hidden="true"><use href="#i-trash"></use></svg>删除当前页失效</button>
+              <button class="btn" onclick="resetConfigNodeFilters()"><svg class="svg-icon" aria-hidden="true"><use href="#i-refresh"></use></svg>重置</button>
+            </div>
+          </div>
           <div class="table-container">
-            <table>
-              <thead><tr><th>名称</th><th>URI</th><th>端口</th><th>来源</th><th>操作</th></tr></thead>
+            <table class="config-nodes-table">
+              <thead><tr><th style="min-width:160px;">名称</th><th style="min-width:340px;">URI</th><th style="min-width:72px;">端口</th><th style="min-width:96px;">来源</th><th style="min-width:110px;">地域</th><th style="min-width:92px;">状态</th><th style="min-width:84px;">延迟</th><th style="min-width:72px;">失败</th><th style="min-width:220px;">出口 / 类型</th><th style="min-width:320px;">操作</th></tr></thead>
               <tbody id="configNodesTableBody"></tbody>
             </table>
+          </div>
+          <div class="pagination-bar">
+            <div id="configNodesPageInfo">共 0 条</div>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <button class="btn" id="configNodesPrevBtn" onclick="changeConfigNodesPage(-1)"><svg class="svg-icon" aria-hidden="true"><use href="#i-chevron-left"></use></svg>上一页</button>
+              <span id="configNodesPageText">第 1 / 1 页</span>
+              <button class="btn" id="configNodesNextBtn" onclick="changeConfigNodesPage(1)">下一页<svg class="svg-icon" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
+              <input type="number" id="configNodesPageJumpInput" class="setting-input" min="1" placeholder="页码" style="width:84px;" />
+              <button class="btn" onclick="jumpConfigNodesPage()">跳转</button>
+            </div>
           </div>
         </div>
       </div>
@@ -609,7 +1189,25 @@
         </div>
 
         <div class="panel">
-          <div class="panel-header"><div class="panel-title">节点质量分析</div></div>
+          <div class="panel-header">
+            <div class="panel-title">节点质量分析</div>
+            <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+              <div id="debugNodesPageInfo">共 0 条</div>
+              <label style="display:flex; align-items:center; gap:6px; color:var(--text-muted);">
+                每页
+                <select id="debugNodesPageSize" class="setting-input" style="width:88px;">
+                  <option value="20">20</option>
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                </select>
+              </label>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <button id="debugNodesPrevBtn" class="btn btn-sm" onclick="changeDebugNodesPage(-1)">上一页</button>
+                <span id="debugNodesPageText">第 1 / 1 页</span>
+                <button id="debugNodesNextBtn" class="btn btn-sm" onclick="changeDebugNodesPage(1)">下一页</button>
+              </div>
+            </div>
+          </div>
           <div class="table-container">
             <table>
               <thead>
@@ -634,11 +1232,48 @@
             <div class="panel-title">控制台日志 (Console Logs)</div>
             <div style="display:flex; align-items:center; gap:12px;">
               <label style="font-size:13px; color:var(--text-muted); display:flex; align-items:center; gap:6px;"><input type="checkbox" id="autoScrollLogs" checked> 自动滚动</label>
-              <button class="btn btn-sm" onclick="pollLogs()">↺ 刷新</button>
+              <button class="btn btn-sm" onclick="pollLogs()"><svg class="svg-icon sm" aria-hidden="true"><use href="#i-refresh"></use></svg>刷新</button>
             </div>
           </div>
           <div style="padding: 0;">
             <textarea id="consoleLogs" readonly style="width:100%; height:calc(100vh - 220px); min-height:400px; background:var(--bg-input); color:var(--text-main); font-family:'JetBrains Mono',monospace; font-size:12px; line-height:1.7; border:none; border-top:1px solid var(--border); padding:16px; resize:none; box-sizing:border-box; white-space:pre; overflow-x:auto;"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <!-- API Tab -->
+      <div id="apiTab" class="tab-content">
+        <div style="max-width: 900px; margin: 0 auto;">
+          <div style="font-size: 20px; font-weight: 700; margin-bottom: 24px; color: var(--text-main);">API 使用说明</div>
+          <div class="panel">
+            <div class="panel-header"><div class="panel-title">调用示例</div></div>
+            <div class="api-docs-grid">
+              <div class="api-doc-item">
+                <h4>鉴权</h4>
+                <p>默认使用查询参数 <code>?apikey=xxx</code>。同时兼容 <code>?api_key=xxx</code>、<code>X-API-Key</code> 和 <code>Authorization: Bearer</code>。</p>
+                <pre class="api-doc-code" id="apiDocAuthExample"></pre>
+              </div>
+              <div class="api-doc-item">
+                <h4>随机取代理</h4>
+                <p>从当前可用节点里随机返回一个代理地址。可加 <code>scheme=http|socks5|all</code> 和 <code>format=json</code>。</p>
+                <pre class="api-doc-code" id="apiDocRandomExample"></pre>
+              </div>
+              <div class="api-doc-item">
+                <h4>固定取代理</h4>
+                <p>按节点名、tag 或端口返回固定代理。</p>
+                <pre class="api-doc-code" id="apiDocFixedExample"></pre>
+              </div>
+              <div class="api-doc-item">
+                <h4>取统一代理池入口</h4>
+                <p>返回统一池入口，调度方式由 <code>pool.mode</code> 决定，例如 random / balance。</p>
+                <pre class="api-doc-code" id="apiDocPoolExample"></pre>
+              </div>
+              <div class="api-doc-item">
+                <h4>导出代理</h4>
+                <p>导出当前可用代理列表，支持 HTTP / SOCKS5。</p>
+                <pre class="api-doc-code" id="apiDocExportExample"></pre>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -715,8 +1350,23 @@
               <div class="panel-header"><div class="panel-title">管理面板 (Management)</div></div>
               <div style="padding: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                 <div class="form-group"><label>监听地址</label><input type="text" id="settingMgmtListen" class="setting-input" placeholder="0.0.0.0:8080" /></div>
-                <div class="form-group"><label>访问密码</label><input type="password" id="settingMgmtPassword" class="setting-input" /></div>
+                <div class="form-group"><label>健康检查间隔</label><input type="text" id="settingHealthCheckInterval" class="setting-input" placeholder="5m" /></div>
+                <div class="form-group"><label>API Key</label><input type="password" id="settingMgmtAPIKey" class="setting-input" placeholder="X-API-Key / Bearer token / ?api_key=xxx / ?apikey=xxx" /></div>
+                <div class="form-group">
+                  <label>节点质量 API</label>
+                  <select id="settingQualityProvider" class="setting-input">
+                    <option value="ipinfo_dkly">ipinfo.dkly.net</option>
+                    <option value="auto">auto - dkly，有 key 时回退 ip-api / IPinfo Lite</option>
+                    <option value="ip-api">ip-api.com 免费接口</option>
+                    <option value="ipinfo_lite">IPinfo Lite</option>
+                    <option value="off">关闭</option>
+                  </select>
+                </div>
+                <div class="form-group"><label>质量 API Key</label><input type="password" id="settingQualityAPIKey" class="setting-input" placeholder="dkly / IPinfo Lite 使用" /></div>
+                <div class="form-group"><label>质量缓存时间</label><input type="text" id="settingQualityCacheTTL" class="setting-input" placeholder="6h" /></div>
+                <div class="checkbox-row" style="align-self:end;"><input type="checkbox" id="settingQualityEnabled" /><label for="settingQualityEnabled">启用节点出口质量识别</label></div>
               </div>
+              <div style="font-size: 11px; color: var(--text-muted); padding: 0 16px 16px;">可获取出口 IP / ASN / ISP / 国家 / 机房或代理类型。默认使用 ipinfo.dkly.net；如切到 IPinfo Lite，也复用这里的 API Key。</div>
             </div>
 
             <div class="panel" style="margin-bottom: 16px;">
@@ -779,10 +1429,11 @@
                   </div>
                 </div>
                 <div class="form-group" style="margin-top: 12px;">
-                  <label>订阅链接 (每行一个 URL)</label>
-                  <textarea id="settingSubURLs" rows="4" class="setting-input" placeholder="https://example.com/subscribe?token=xxx" style="resize:vertical; font-size:12px;"></textarea>
+                  <label>订阅 / API / GitHub Raw URL (每行一个)</label>
+                  <textarea id="settingSubURLs" rows="4" class="setting-input" placeholder="https://api.example.com/proxies
+https://raw.githubusercontent.com/user/repo/main/nodes.txt" style="resize:vertical; font-size:12px;"></textarea>
                 </div>
-                <div style="font-size: 11px; color: var(--success); margin-top: 8px;">订阅配置变更保存后立即生效</div>
+                <div style="font-size: 11px; color: var(--success); margin-top: 8px;">订阅/API/GitHub Raw URL 返回 Base64、纯文本节点列表或 Clash YAML，保存后立即拉取并生效</div>
               </div>
             </div>
 
@@ -798,14 +1449,19 @@
 
   <!-- Modals -->
   <!-- Auth Modal -->
-  <div class="modal-overlay" id="loginOverlay">
+  <div class="modal-overlay login-overlay" id="loginOverlay">
     <div class="modal">
       <div class="modal-header">身份验证</div>
       <form onsubmit="handleLogin(event)">
         <div class="modal-body">
           <div class="form-group">
-            <label>系统密码</label>
-            <input type="password" id="password" required placeholder="Enter password..." />
+            <label>API Key</label>
+            <div class="password-input-wrap">
+              <input type="password" id="password" required placeholder="Enter API key..." />
+              <button type="button" class="password-toggle" id="loginPasswordToggle" onclick="toggleLoginPassword()" title="显示密码" aria-label="显示密码">
+                <svg class="svg-icon" aria-hidden="true"><use href="#i-eye"></use></svg>
+              </button>
+            </div>
           </div>
           <div id="loginError" style="color: var(--error); font-size: 12px; display: none;"></div>
         </div>
@@ -819,26 +1475,66 @@
   <!-- Settings Modal -->
   <!-- Node Edit Modal -->
   <div class="modal-overlay" id="nodeModalOverlay">
-    <div class="modal">
+    <div class="modal modal-wide">
       <div class="modal-header" id="nodeModalTitle">节点配置</div>
       <form onsubmit="handleNodeSubmit(event)">
         <div class="modal-body">
+          <div id="nodeModeSwitchWrap">
+            <div class="mode-switch">
+              <button type="button" id="nodeModeSingleBtn" class="active" onclick="setNodeInputMode('single')">单个添加</button>
+              <button type="button" id="nodeModeBatchBtn" onclick="setNodeInputMode('batch')">批量导入</button>
+            </div>
+          </div>
           <div class="form-group">
             <label>节点名称 Name</label>
-            <input type="text" id="nodeName" placeholder="HK-01" />
+            <input type="text" id="nodeName" placeholder="HK-01（批量添加时可作为名称前缀）" />
           </div>
-          <div class="form-group">
+          <div id="nodeSingleFields">
+            <div style="display:grid; grid-template-columns: 160px 1fr 120px; gap:12px;">
+              <div class="form-group">
+                <label>协议</label>
+                <select id="nodeScheme" class="setting-input" onchange="toggleSingleNodeCustomURI()">
+                  <option value="socks5">SOCKS5</option>
+                  <option value="http">HTTP</option>
+                  <option value="https">HTTPS</option>
+                  <option value="custom">自定义 URI</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>地址 / Host</label>
+                <input type="text" id="nodeHost" placeholder="ip.boltproxy.org 或 1.2.3.4" />
+              </div>
+              <div class="form-group">
+                <label>端口</label>
+                <input type="number" id="nodePort" placeholder="1600" min="1" max="65535" />
+              </div>
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-top:12px;">
+              <div class="form-group">
+                <label>用户名</label>
+                <input type="text" id="nodeUser" placeholder="username" />
+              </div>
+              <div class="form-group">
+                <label>密码</label>
+                <input type="text" id="nodePass" placeholder="password" />
+              </div>
+            </div>
+            <div class="form-group" id="nodeCustomURIWrap" style="display:none; margin-top:12px;">
+              <label>自定义 URI</label>
+              <textarea id="nodeCustomUri" rows="4" class="setting-input" style="resize:vertical; font-size:12px;" placeholder="vless://... 或任意支持的 URI"></textarea>
+            </div>
+            <div style="font-size:11px; color:var(--text-muted); margin-top:8px;">单个添加推荐直接填 host / port / user / pass；如果不是 HTTP/SOCKS5，再切到“自定义 URI”。</div>
+          </div>
+          <div class="form-group" id="nodeBatchFields" style="display:none;">
             <label>节点 URI</label>
-            <input type="text" id="nodeUri" required placeholder="vless://... 或 anytls://..." />
-          </div>
-          <div class="form-group">
-            <label>映射端口 (可选)</label>
-            <input type="number" id="nodePort" placeholder="0" />
+            <textarea id="nodeUri" required rows="6" class="setting-input" style="resize:vertical; font-size:12px;" placeholder="一行一个 URI，支持批量添加&#10;vless://...&#10;socks5://user:pass@host:port&#10;http://host:port"></textarea>
+            <div id="nodeUriHint" style="font-size:11px; color:var(--text-muted);">批量添加支持一行一个 URI；如果填写名称，会自动生成名称前缀编号。</div>
           </div>
           <input type="hidden" id="nodeEditName" />
         </div>
         <div class="modal-footer">
           <button type="button" class="btn" onclick="document.getElementById('nodeModalOverlay').classList.remove('show')">取消</button>
+          <button type="button" class="btn" id="nodeTestBtn" onclick="testNodeDraft()">测试代理</button>
           <button type="submit" class="btn btn-primary" id="nodeSubmitBtn">保存</button>
         </div>
       </form>
@@ -850,8 +1546,8 @@
   <div class="toast-container" id="toastContainer"></div>
 
   <!-- Full-screen Loading Overlay -->
-  <div id="fullscreenLoading" style="display:none; position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.5); backdrop-filter:blur(4px); display:none; align-items:center; justify-content:center;">
-    <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:12px; padding:32px 48px; text-align:center; box-shadow:0 8px 32px rgba(0,0,0,0.3);">
+  <div id="fullscreenLoading" class="fullscreen-loading">
+    <div class="fullscreen-loading-card">
       <div style="margin-bottom:16px;">
         <svg width="40" height="40" viewBox="0 0 40 40" style="animation:spin 1s linear infinite;">
           <circle cx="20" cy="20" r="16" fill="none" stroke="var(--border)" stroke-width="3"/>
@@ -866,12 +1562,29 @@
 
   <script>
     // JS Logic - Kept exact API calls from original
-    let isAutoRefresh = true;
-    let autoRefreshInterval = null;
-    let allNodesCache = [];
-    let currentRegionFilter = 'all';
+    let monitorNodesCache = [];
+    let dashboardFastestNodes = [];
+    let dashboardRegionStats = {};
+    let dashboardRegionHealthy = {};
+    let monitorNodesPage = 1;
+    let monitorNodesPageSize = 20;
+    let monitorNodesTotalPages = 1;
+    let monitorNodesFilteredTotal = 0;
     let isEditMode = false;
     let configNodes = [];
+    let configNodesPage = 1;
+    let configNodesPageSize = 20;
+    let configNodesTotal = 0;
+    let configNodesTotalPages = 1;
+    let debugNodesPage = 1;
+    let debugNodesPageSize = 20;
+    let debugNodesTotal = 0;
+    let debugNodesTotalPages = 1;
+    let configNodesKeyword = '';
+    let configNodesSource = 'all';
+    let configNodesStatus = 'all';
+    let configNodesRegion = '';
+    let nodeInputMode = 'single';
     let _savedSubSnapshot = '';
     let _savedCoreSnapshot = '';
 
@@ -879,10 +1592,10 @@
       document.getElementById('fullscreenLoadingText').textContent = text || '处理中...';
       document.getElementById('fullscreenLoadingSubtext').textContent = subtext || '';
       const el = document.getElementById('fullscreenLoading');
-      el.style.display = 'flex';
+      el.classList.add('show');
     }
     function hideFullscreenLoading() {
-      document.getElementById('fullscreenLoading').style.display = 'none';
+      document.getElementById('fullscreenLoading').classList.remove('show');
     }
 
     // Chart instances
@@ -905,7 +1618,26 @@
       trafficChartInst && trafficChartInst.resize();
     });
 
-    const EMOJIS = { jp: '🇯🇵', kr: '🇰🇷', us: '🇺🇸', hk: '🇭🇰', tw: '🇹🇼', sg: '🇸🇬', other: '🌍' };
+    const REGION_ICON_COLORS = {
+      jp: '#ef4444', kr: '#6366f1', us: '#2563eb',
+      hk: '#f97316', tw: '#0ea5e9', sg: '#dc2626',
+      other: '#64748b'
+    };
+
+    function iconSvg(name, cls = 'svg-icon') {
+      return `<svg class="${cls}" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
+    }
+
+    function regionSvg(region) {
+      const key = (region || 'other').toLowerCase();
+      const label = key === 'other' ? 'OT' : key.slice(0, 2).toUpperCase();
+      const color = REGION_ICON_COLORS[key] || REGION_ICON_COLORS.other;
+      return `<svg class="region-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="${color}"></circle><text x="12" y="12">${label}</text></svg>`;
+    }
+
+    function buttonIcon(name) {
+      return iconSvg(name, 'svg-icon sm');
+    }
 
     function showToast(msg, type='success') {
       const c = document.getElementById('toastContainer');
@@ -915,12 +1647,24 @@
       setTimeout(() => { t.style.opacity=0; setTimeout(()=>t.remove(),300); }, 3000);
     }
 
+    function showLoginOverlay() {
+      document.body.classList.remove('auth-pending');
+      document.body.classList.add('auth-required');
+      document.getElementById('loginOverlay').classList.add('show');
+    }
+
+    function hideLoginOverlay() {
+      document.body.classList.remove('auth-pending', 'auth-required');
+      document.getElementById('loginOverlay').classList.remove('show');
+    }
+
     async function checkAuth() {
       try {
         const res = await fetch('/api/nodes');
-        if (res.status === 401) { document.getElementById('loginOverlay').classList.add('show'); return false; }
+        if (res.status === 401) { showLoginOverlay(); return false; }
+        hideLoginOverlay();
         return true;
-      } catch (e) { return false; }
+      } catch (e) { showLoginOverlay(); return false; }
     }
 
     async function handleLogin(e) {
@@ -929,9 +1673,20 @@
       const err = document.getElementById('loginError');
       try {
         const res = await fetch('/api/auth', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({password:pwd})});
-        if (res.ok) { document.getElementById('loginOverlay').classList.remove('show'); refresh(); }
+        if (res.ok) { hideLoginOverlay(); refresh(); }
         else { err.textContent = 'Auth Failed'; err.style.display = 'block'; }
       } catch (ex) { err.textContent = ex.message; err.style.display = 'block'; }
+    }
+
+    function toggleLoginPassword() {
+      const input = document.getElementById('password');
+      const btn = document.getElementById('loginPasswordToggle');
+      if (!input || !btn) return;
+      const show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      btn.innerHTML = show ? iconSvg('eye-off') : iconSvg('eye');
+      btn.title = show ? '隐藏密码' : '显示密码';
+      btn.setAttribute('aria-label', show ? '隐藏密码' : '显示密码');
     }
 
     function switchTab(name) {
@@ -942,10 +1697,13 @@
       if (name === 'dashboard') {
         setTimeout(updateDashboardCharts, 100);
       }
-      if (name === 'manage') loadConfigNodes();
+      if (name === 'manage') { loadConfigNodes(); loadManageSubscriptionConfig(); }
       if (name === 'debug') {
         loadDebugData();
         setTimeout(updateDebugCharts, 100);
+      }
+      if (name === 'api') {
+        renderAPIDocs();
       }
       if (name === 'logs') {
         startLogPolling();
@@ -955,13 +1713,20 @@
       if (name === 'settings') loadSettingsPage();
     }
 
-    function toggleAutoRefresh() {
-      isAutoRefresh = !isAutoRefresh;
-      document.getElementById('autoRefreshBtn').textContent = isAutoRefresh ? '⏹ 关闭自动刷新' : '▶ 开启自动刷新';
-      if(isAutoRefresh) startAutoRefresh(); else stopAutoRefresh();
+    function setSidebarCollapsed(collapsed) {
+      document.body.classList.toggle('sidebar-collapsed', !!collapsed);
+      localStorage.setItem('sidebarCollapsed', collapsed ? '1' : '0');
+      const title = collapsed ? '展开侧边栏' : '收起侧边栏';
+      document.querySelectorAll('#sidebarToggleBtn, .brand-toggle').forEach(btn => {
+        btn.title = title;
+        btn.setAttribute('aria-label', title);
+      });
+      window.dispatchEvent(new Event('resize'));
     }
-    function startAutoRefresh() { if(!autoRefreshInterval) autoRefreshInterval = setInterval(()=> { if(!document.hidden && document.getElementById('dashboardTab').classList.contains('active')) refresh(); }, 10000); }
-    function stopAutoRefresh() { clearInterval(autoRefreshInterval); autoRefreshInterval = null; }
+
+    function toggleSidebar() {
+      setSidebarCollapsed(!document.body.classList.contains('sidebar-collapsed'));
+    }
 
     function getQualityWidth(ms) {
       if(ms < 0) return 0; if(ms > 1000) return 100;
@@ -984,24 +1749,44 @@
       const div = document.createElement('div'); div.textContent = text; return div.innerHTML;
     }
 
+    function escapeAttr(text) {
+      return escapeHtml(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
     async function refresh() {
       try {
-        const res = await fetch('/api/nodes');
-        if (res.status === 401) { document.getElementById('loginOverlay').classList.add('show'); stopAutoRefresh(); return; }
+        monitorNodesPageSize = parseInt(document.getElementById('monitorNodePageSize')?.value || monitorNodesPageSize || 20) || 20;
+        const qs = new URLSearchParams({
+          page: String(monitorNodesPage),
+          page_size: String(monitorNodesPageSize)
+        });
+        const res = await fetch('/api/nodes?' + qs.toString());
+        if (res.status === 401) { showLoginOverlay(); stopAutoRefresh(); return; }
         const data = await res.json();
-        allNodesCache = data.nodes || [];
+        monitorNodesCache = data.nodes || [];
+        monitorNodesPage = data.page || 1;
+        monitorNodesPageSize = data.page_size || monitorNodesPageSize;
+        monitorNodesTotalPages = data.total_pages || 1;
+        monitorNodesFilteredTotal = data.filtered_total || 0;
+        dashboardFastestNodes = data.fastest_nodes || [];
+        dashboardRegionStats = data.region_stats || {};
+        dashboardRegionHealthy = data.region_healthy || {};
         updateDashboardStats(data);
-        filterByRegion(currentRegionFilter);
+        renderNodes(monitorNodesCache);
         document.getElementById('lastUpdate').textContent = `Sync: ${new Date().toLocaleTimeString()}`;
         fetchSubscriptionStatus();
       } catch(e) {}
     }
 
     function updateDashboardStats(data) {
-      document.getElementById('totalNodes').textContent = data.total_nodes || allNodesCache.length;
-      document.getElementById('healthyNodes').textContent = allNodesCache.filter(n => !n.blacklisted && n.initial_check_done && n.available).length;
-      document.getElementById('activeConnections').textContent = allNodesCache.reduce((s, n) => s + (n.active_connections||0), 0);
-      document.getElementById('blacklistedNodes').textContent = allNodesCache.filter(n => n.blacklisted || (!n.available && n.initial_check_done)).length;
+      document.getElementById('totalNodes').textContent = data.total_nodes || 0;
+      document.getElementById('healthyNodes').textContent = data.healthy_nodes || 0;
+      document.getElementById('activeConnections').textContent = data.active_connections || 0;
+      document.getElementById('blacklistedNodes').textContent = data.blacklisted_nodes || 0;
+      document.getElementById('monitorPageInfo').textContent = `第 ${monitorNodesPage} / ${Math.max(monitorNodesTotalPages, 1)} 页`;
+      document.getElementById('monitorTotalInfo').textContent = `当前筛选共 ${monitorNodesFilteredTotal} 条`;
+      document.getElementById('monitorPrevBtn').disabled = monitorNodesPage <= 1;
+      document.getElementById('monitorNextBtn').disabled = monitorNodesPage >= Math.max(monitorNodesTotalPages, 1);
       
       if(document.getElementById('dashboardTab').classList.contains('active')) {
         updateDashboardCharts();
@@ -1022,18 +1807,14 @@
       if(!regionChartInst) regionChartInst = initEchart('regionChart');
       if(!latencyChartInst) latencyChartInst = initEchart('latencyChart');
 
-      if (!allNodesCache || allNodesCache.length === 0) return;
-
-      // 1. Region Chart Data
       const regionStats = {};
-      allNodesCache.forEach(n => {
-        const r = (n.region || 'other').toUpperCase();
-        if(!regionStats[r]) regionStats[r] = { total: 0, healthy: 0 };
-        regionStats[r].total++;
-        if(!n.blacklisted && n.initial_check_done && n.available) {
-          regionStats[r].healthy++;
-        }
+      Object.keys(dashboardRegionStats || {}).forEach(k => {
+        regionStats[k.toUpperCase()] = {
+          total: dashboardRegionStats[k] || 0,
+          healthy: (dashboardRegionHealthy || {})[k] || 0
+        };
       });
+      if (Object.keys(regionStats).length === 0) return;
       
       const regionData = Object.keys(regionStats).map(k => ({
         name: k,
@@ -1061,7 +1842,7 @@
       });
 
       // 2. Latency Chart Data
-      const sorted = allNodesCache.filter(n => n.last_latency_ms > 0 && !n.blacklisted).sort((a,b) => a.last_latency_ms - b.last_latency_ms).slice(0, 10);
+      const sorted = dashboardFastestNodes || [];
       const latencyX = sorted.map(n => n.name || n.tag);
       const latencyY = sorted.map(n => n.last_latency_ms);
 
@@ -1149,13 +1930,6 @@
       };
     }
 
-    function filterByRegion(region) {
-      currentRegionFilter = region;
-      document.querySelectorAll('.region-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.region === region));
-      const flt = region === 'all' ? allNodesCache : allNodesCache.filter(n => (n.region||'other') === region);
-      renderNodes(flt);
-    }
-
     function renderNodes(nodes) {
       const tbody = document.getElementById('nodesTableBody');
       if (!nodes.length) { tbody.innerHTML = ''; document.getElementById('emptyState').style.display='block'; return;}
@@ -1164,13 +1938,14 @@
         const ms = n.last_latency_ms || -1;
         let badge = '', statusText = '';
         if (n.blacklisted) { badge = 'badge-error'; statusText = '拉黑 Blocked'; }
-        else if (ms < 0) { badge = 'badge-offline'; statusText = '未测试 Unknown'; }
+        else if (n.initial_check_done && !n.available) { badge = 'badge-error'; statusText = '失败 Failed'; }
         else if (n.failure_count >= 1) { badge = 'badge-error'; statusText = '异常 Error'; }
+        else if (ms < 0) { badge = 'badge-offline'; statusText = '未测试 Unknown'; }
         else { badge = 'badge-healthy'; statusText = '在线 Healthy'; }
 
         return `<tr>
           <td><span class="badge ${badge}">${statusText}</span></td>
-          <td>${EMOJIS[n.region||'other']} ${(n.region||'other').toUpperCase()}</td>
+          <td><span class="region-cell">${regionSvg(n.region || 'other')} ${(n.region||'other').toUpperCase()}</span></td>
           <td>
             <div style="font-weight: 500">${escapeHtml(n.name || n.tag)}</div>
             <div style="font-size: 11px; color: var(--text-muted)">${escapeHtml(n.tag)}</div>
@@ -1182,14 +1957,69 @@
               <div class="lat-bar"><div class="lat-fill" style="width:${getQualityWidth(ms)}%; background:${getQualityColor(ms)}"></div></div>
             </div>
           </td>
+          <td>${renderQualityInfo(n)}</td>
           <td class="tt-mono">${n.active_connections||0}</td>
           <td class="tt-mono" style="color: ${n.failure_count>0 ? 'var(--error)' : 'inherit'}">${n.failure_count||0}</td>
-          <td>
-            <button class="btn btn-sm" onclick="probeNode('${escapeHtml(n.tag)}')">探测</button>
-            ${n.blacklisted ? `<button class="btn btn-sm btn-primary" onclick="releaseNode('${escapeHtml(n.tag)}')">解封</button>` : `<button class="btn btn-sm btn-danger" onclick="blacklistNode('${escapeHtml(n.tag)}')">拉黑</button>`}
-          </td>
         </tr>`;
       }).join('');
+    }
+
+    function qualityTypeLabel(type) {
+      switch(type) {
+        case 'isp': return '家宽/ISP';
+        case 'datacenter': return '机房';
+        case 'mobile': return '移动';
+        case 'unknown': return '未知';
+        default: return '检测中';
+      }
+    }
+
+    function qualityBadgeClass(type) {
+      switch(type) {
+        case 'isp': return 'badge-healthy';
+        case 'datacenter': return 'badge-warning';
+        case 'mobile': return 'badge-warning';
+        case 'unknown': return 'badge-offline';
+        default: return 'badge-offline';
+      }
+    }
+
+    function renderQualityInfo(n) {
+      const type = n.proxy_type || '';
+      const ip = n.exit_ip || '';
+      const isp = n.isp || n.org || n.as_name || '';
+      const asn = n.asn || '';
+      if (!type && !ip) {
+        if (n.quality_error) {
+          return `<div class="quality-cell"><span class="badge badge-error">获取失败</span><div class="quality-meta" title="${escapeHtml(n.quality_error)}">${escapeHtml(n.quality_error)}</div></div>`;
+        }
+        return `<div class="quality-cell"><span class="badge badge-offline">待检测</span></div>`;
+      }
+      const title = [ip, n.ip_valid ? 'valid public ip' : (n.ip_invalid_reason || ''), asn, n.as_name, n.isp, n.org].filter(Boolean).join(' / ');
+      const ipValidBadge = ip ? (n.ip_valid ? '<span class="badge badge-healthy" style="margin-left:6px">IP有效</span>' : '<span class="badge badge-error" style="margin-left:6px">IP无效</span>') : '';
+      const ipReason = ip && !n.ip_valid ? (n.ip_invalid_reason || n.ip_type || 'invalid ip') : '';
+      const flags = [n.ip_version || '', n.ip_type ? ('ip:' + n.ip_type) : '', n.mobile ? 'mobile' : '', n.hosting ? 'hosting' : '', n.proxy ? 'proxy' : ''].filter(Boolean).join(' · ');
+      return `<div class="quality-cell" title="${escapeHtml(title)}">
+        <span class="badge ${qualityBadgeClass(type)}">${qualityTypeLabel(type)}</span>
+        <span class="tt-mono" style="margin-left:6px">${escapeHtml(ip || '-')}</span>${ipValidBadge}
+        <div class="quality-meta">${escapeHtml([asn, isp].filter(Boolean).join(' · ') || '-')}</div>
+        ${ipReason ? `<div class="quality-meta" style="color:var(--error)">${escapeHtml(ipReason)}</div>` : ''}
+        ${flags ? `<div class="quality-meta">${escapeHtml(flags)}</div>` : ''}
+      </div>`;
+    }
+
+    async function qualityNode(tag) {
+      showToast('质量检查中...');
+      try {
+        const r = await fetch('/api/nodes/'+encodeURIComponent(tag)+'/quality', {method:'POST'});
+        const d = await r.json();
+        if(d.error) showToast(d.error, 'error');
+        else {
+          const q = d.quality || {};
+          showToast(`质量: ${qualityTypeLabel(q.proxy_type)} ${q.exit_ip || ''} ${q.ip_valid ? 'IP有效' : 'IP无效'}`);
+          refresh();
+        }
+      } catch(e) { showToast(e.message, 'error'); }
     }
 
     async function probeNode(tag) {
@@ -1215,6 +2045,13 @@
         const d = await r.json();
         if(d.error) showToast(d.error, 'error'); else { showToast(d.message); refresh(); }
       } catch(e) { showToast('拉黑失败', 'error'); }
+    }
+
+    function changeMonitorNodesPage(delta) {
+      const nextPage = monitorNodesPage + delta;
+      if (nextPage < 1 || nextPage > Math.max(monitorNodesTotalPages, 1)) return;
+      monitorNodesPage = nextPage;
+      refresh();
     }
 
     // Probe All
@@ -1261,6 +2098,48 @@
       }
     }
 
+    async function qualityAllNodes() {
+      if(isProbing) return; isProbing = true;
+      document.getElementById('probeProgress').classList.add('show');
+      document.getElementById('probeProgressFill').style.width = '0%';
+      let total = 0, current = 0, suc = 0, fail = 0;
+      try {
+        const res = await fetch('/api/nodes/quality-all', { method: 'POST' });
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while(true) {
+          const {done, value} = await reader.read();
+          if(done) break;
+          buf += decoder.decode(value, {stream:true});
+          const lines = buf.split('\n');
+          buf = lines.pop() || '';
+          for(const line of lines) {
+            if(line.startsWith('data: ')) {
+               try {
+                 const d = JSON.parse(line.slice(6));
+                 if(d.type === 'start') { total = d.total; document.getElementById('probeStats').textContent = `0/${total}`; }
+                 else if(d.type === 'progress') {
+                   current = d.current;
+                   if(d.error) fail++; else suc++;
+                   document.getElementById('probeProgressFill').style.width = `${d.progress}%`;
+                   document.getElementById('probeStats').textContent = `${current}/${total}`;
+                   document.getElementById('probeSuccess').textContent = suc;
+                   document.getElementById('probeFail').textContent = fail;
+                 } else if (d.type === 'complete') {
+                   showToast(`质量检查完成: 成功${d.success}, 失败${d.failed}`);
+                 }
+               } catch(e){}
+            }
+          }
+        }
+      } catch(e){ showToast('批量质量检查失败: ' + e.message, 'error'); }
+      finally {
+        isProbing = false;
+        setTimeout(()=>{ document.getElementById('probeProgress').classList.remove('show'); refresh(); }, 1200);
+      }
+    }
+
     async function exportNodes() {
       try {
         const res = await fetch('/api/export');
@@ -1270,6 +2149,63 @@
         const a = document.createElement('a'); a.href = url; a.download = 'nodes.txt';
         document.body.appendChild(a); a.click(); document.body.removeChild(a); window.URL.revokeObjectURL(url);
       } catch(e) { showToast('导出失败', 'error');}
+    }
+
+    function setIntervalSelectValue(selectEl, interval) {
+      const iv = interval || '';
+      let matched = false;
+      for (let opt of selectEl.options) {
+        if (iv === opt.value || iv === opt.value.replace('m','m0s') || iv.startsWith(opt.value)) {
+          selectEl.value = opt.value; matched = true; break;
+        }
+      }
+      if (!matched) selectEl.value = '1h';
+    }
+
+    function toggleManageSubPanel(force) {
+      const body = document.getElementById('manageSubPanelBody');
+      const toggle = document.getElementById('manageSubToggle');
+      const text = document.getElementById('manageSubToggleText');
+      const shouldShow = typeof force === 'boolean' ? force : !body.classList.contains('show');
+      body.classList.toggle('show', shouldShow);
+      toggle.classList.toggle('expanded', shouldShow);
+      text.textContent = shouldShow ? '收起' : '展开';
+    }
+
+    async function loadManageSubscriptionConfig() {
+      try {
+        const res = await fetch('/api/subscription/config');
+        if (!res.ok) return;
+        const d = await res.json();
+        document.getElementById('manageSubEnabled').checked = d.enabled || false;
+        setIntervalSelectValue(document.getElementById('manageSubInterval'), d.interval || '1h');
+        document.getElementById('manageSubURLs').value = (d.subscriptions || []).join('\n');
+        document.getElementById('manageSubStatus').textContent = d.enabled ? `定时拉取已开启，间隔 ${document.getElementById('manageSubInterval').value}` : '定时拉取未开启，保存后仍会立即拉取一次';
+        const count = (d.subscriptions || []).filter(Boolean).length;
+        document.getElementById('manageSubSummary').textContent = count > 0 ? `${count} 条 URL · ${d.enabled ? '已启用' : '未启用'} · 间隔 ${document.getElementById('manageSubInterval').value}` : '未配置拉取 URL';
+      } catch(e) { console.error('Failed to load subscription config:', e); }
+    }
+
+    async function saveManageSubscriptionConfig() {
+      const urls = document.getElementById('manageSubURLs').value.split('\n').map(s => s.trim()).filter(Boolean);
+      const enabled = document.getElementById('manageSubEnabled').checked;
+      const interval = document.getElementById('manageSubInterval').value;
+      showFullscreenLoading('更新订阅/API/GitHub Raw...', '正在拉取并重载节点，请稍候');
+      try {
+        const res = await fetch('/api/subscription/config', {
+          method:'PUT', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({subscriptions: urls, enabled, interval})
+        });
+        const d = await res.json();
+        hideFullscreenLoading();
+        if (!res.ok || d.error) { showToast(d.error || '保存失败', 'error'); return; }
+        if (d.refresh_error) showToast('配置已保存，但拉取失败: ' + d.refresh_error, 'error');
+        else showToast(`配置已保存，当前节点数: ${d.node_count || 0}`);
+        loadManageSubscriptionConfig();
+        loadConfigNodes();
+        fetchSubscriptionStatus();
+        refresh();
+      } catch(e) { hideFullscreenLoading(); showToast('保存失败: ' + e.message, 'error'); }
     }
 
     // Subscriptions
@@ -1298,45 +2234,435 @@
     }
 
     // Manage Nodes
-    async function loadConfigNodes() {
+    async function loadConfigNodes(page = configNodesPage) {
       try {
-        const res = await fetch('/api/nodes/config');
+        configNodesPage = page || 1;
+        configNodesPageSize = parseInt(document.getElementById('configNodePageSize')?.value || configNodesPageSize || 20) || 20;
+        configNodesKeyword = (document.getElementById('configNodeKeyword')?.value || '').trim();
+        configNodesSource = document.getElementById('configNodeSourceFilter')?.value || 'all';
+        configNodesStatus = document.getElementById('configNodeStatusFilter')?.value || 'all';
+        configNodesRegion = (document.getElementById('configNodeRegionFilter')?.value || '').trim().toLowerCase();
+        const qs = new URLSearchParams({
+          page: String(configNodesPage),
+          page_size: String(configNodesPageSize),
+          keyword: configNodesKeyword,
+          source: configNodesSource,
+          status: configNodesStatus
+        });
+        const res = await fetch('/api/nodes/config?' + qs.toString());
         const data = await res.json();
-        configNodes = data.nodes || [];
+        configNodes = (data.nodes || []).filter((n) => {
+          if (!configNodesRegion) return true;
+          const region = String(n.runtime?.region || '').toLowerCase();
+          const country = String(n.runtime?.country || '').toLowerCase();
+          const countryCode = String(n.runtime?.country_code || '').toLowerCase();
+          const exitIp = String(n.runtime?.exit_ip || '').toLowerCase();
+          return region.includes(configNodesRegion) || country.includes(configNodesRegion) || countryCode.includes(configNodesRegion) || exitIp.includes(configNodesRegion);
+        });
+        configNodesTotal = data.total || 0;
+        configNodesPage = data.page || 1;
+        configNodesPageSize = data.page_size || configNodesPageSize;
+        configNodesTotalPages = data.total_pages || 1;
         const tbody = document.getElementById('configNodesTableBody');
         tbody.innerHTML = configNodes.map((n, i) => `
           <tr>
             <td><strong>${escapeHtml(n.name)}</strong></td>
-            <td class="tt-mono" style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(n.uri)}</td>
+            <td class="tt-mono wrap-uri">${escapeHtml(n.uri)}</td>
             <td class="tt-mono">${n.port || '-'}</td>
             <td><span class="badge ${n.source==='subscription'?'badge-warning':'badge-healthy'}">${n.source||'manual'}</span></td>
-            <td>
-              <button class="btn btn-sm" onclick="showEditNodeModal('${escapeHtml(n.name)}')">编辑</button>
-              <button class="btn btn-sm btn-danger" onclick="deleteNode('${escapeHtml(n.name)}')">删除</button>
+            <td>${renderConfigNodeRegion(n)}</td>
+            <td>${renderConfigNodeStatus(n)}</td>
+            <td class="tt-mono">${renderConfigNodeLatency(n)}</td>
+            <td class="tt-mono" style="color:${(n.runtime?.failure_count || 0) > 0 ? 'var(--error)' : 'inherit'}">${n.runtime?.failure_count ?? 0}</td>
+            <td class="wrap-quality">${renderQualityInfo({
+              proxy_type: n.runtime?.proxy_type,
+              exit_ip: n.runtime?.exit_ip,
+              ip_valid: n.runtime?.ip_valid,
+              quality_error: n.runtime?.quality_error
+            })}</td>
+            <td class="wrap-actions">
+              <div class="action-group">
+                ${n.runtime && n.runtime.tag ? `<button class="btn btn-sm config-node-action" data-action="probe" data-tag="${escapeAttr(n.runtime.tag)}" data-name="${escapeAttr(n.name)}">${buttonIcon('zap')}探测</button>` : `<button class="btn btn-sm config-node-action" data-action="reload-needed" data-name="${escapeAttr(n.name)}">${buttonIcon('alert')}需重载</button>`}
+                ${n.runtime && n.runtime.tag ? `<button class="btn btn-sm config-node-action" data-action="quality" data-tag="${escapeAttr(n.runtime.tag)}" data-name="${escapeAttr(n.name)}">${buttonIcon('search')}质量</button>` : `<button class="btn btn-sm config-node-action" data-action="reload-needed" data-name="${escapeAttr(n.name)}">${buttonIcon('alert')}未生效</button>`}
+                <button class="btn btn-sm config-node-action" data-action="edit" data-name="${escapeAttr(n.name)}">${buttonIcon('edit')}编辑</button>
+                ${renderConfigNodeActionMenu(n)}
+              </div>
             </td>
           </tr>
         `).join('');
-        document.getElementById('subscriptionWarning').style.display = configNodes.some(n=>n.source==='subscription') ? 'block' : 'none';
+        document.getElementById('configNodesPageInfo').textContent = `共 ${configNodesTotal} 条`;
+        document.getElementById('configNodesPageText').textContent = `第 ${configNodesPage} / ${Math.max(configNodesTotalPages, 1)} 页`;
+        document.getElementById('configNodesPrevBtn').disabled = configNodesPage <= 1;
+        document.getElementById('configNodesNextBtn').disabled = configNodesPage >= Math.max(configNodesTotalPages, 1);
+        document.getElementById('subscriptionWarning').style.display = data.has_subscription_nodes ? 'block' : 'none';
       } catch(e){}
     }
 
-    function showAddNodeModal() { isEditMode=false; document.getElementById('nodeModalTitle').textContent='添加节点'; document.getElementById('nodeName').value=''; document.getElementById('nodeUri').value=''; document.getElementById('nodePort').value=''; document.getElementById('nodeModalOverlay').classList.add('show');}
+    function renderConfigNodeStatus(n) {
+      const state = n.runtime_state || 'unknown';
+      const rt = n.runtime || {};
+      if (state === 'healthy') return '<span class="badge badge-healthy">有效</span>';
+      if (state === 'blacklisted') return '<span class="badge badge-error">拉黑</span>';
+      if (state === 'unhealthy') {
+        const reason = rt.quality_error ? escapeHtml(rt.quality_error) : (rt.exit_ip && rt.ip_valid === false ? 'IP无效' : '探测失败');
+        return `<span class="badge badge-error" title="${reason}">失效</span>`;
+      }
+      return '<span class="badge badge-offline">未检测</span>';
+    }
+
+    function renderConfigNodeRegion(n) {
+      const code = String(n.runtime?.country_code || n.runtime?.region || '').toUpperCase();
+      const country = String(n.runtime?.country || '').trim();
+      const label = code || '-';
+      const title = country ? `${country} (${label})` : label;
+      return `<span class="region-cell" title="${escapeHtml(title)}">${regionSvg(label)} <span class="tt-mono">${escapeHtml(label)}</span></span>`;
+    }
+
+    function renderConfigNodeLatency(n) {
+      const rt = n.runtime || {};
+      return rt.last_latency_ms >= 0 ? `${rt.last_latency_ms}ms` : '-';
+    }
+
+    function renderConfigNodeActionMenu(n) {
+      const items = [];
+      if (n.connect_socks) {
+        items.push(`<button class="btn btn-sm config-node-action" data-action="copy-socks" data-text="${escapeAttr(n.connect_socks)}">${buttonIcon('copy')}复制 SOCKS5</button>`);
+      }
+      if (n.connect_http) {
+        items.push(`<button class="btn btn-sm config-node-action" data-action="copy-http" data-text="${escapeAttr(n.connect_http)}">${buttonIcon('link')}复制 HTTP</button>`);
+      }
+      if (n.runtime && n.runtime.tag) {
+        if (n.runtime_state === 'blacklisted') {
+          items.push(`<button class="btn btn-sm btn-primary config-node-action" data-action="release" data-tag="${escapeAttr(n.runtime.tag)}" data-name="${escapeAttr(n.name)}">${buttonIcon('unlock')}解封</button>`);
+        } else {
+          items.push(`<button class="btn btn-sm btn-danger config-node-action" data-action="blacklist" data-tag="${escapeAttr(n.runtime.tag)}" data-name="${escapeAttr(n.name)}">${buttonIcon('ban')}拉黑</button>`);
+        }
+      }
+      items.push(`<button class="btn btn-sm btn-danger config-node-action" data-action="delete" data-name="${escapeAttr(n.name)}">${buttonIcon('trash')}删除</button>`);
+      return `
+        <div class="action-dropdown">
+          <button class="btn btn-sm config-node-action" data-action="toggle-menu">${buttonIcon('more')}更多</button>
+          <div class="action-menu">
+            ${items.join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    async function probeConfigNode(tag, name) {
+      try {
+        const r = await fetch('/api/nodes/' + encodeURIComponent(tag) + '/probe', {method:'POST'});
+        const d = await r.json();
+        if (d.error) {
+          showToast(`${name} 探测失败: ${d.error}`, 'error');
+        } else {
+          showToast(`${name} 延迟 ${d.latency_ms}ms`);
+          refresh();
+          loadConfigNodes(configNodesPage);
+        }
+      } catch(e) {
+        showToast(`${name} 探测失败: ${e.message}`, 'error');
+      }
+    }
+
+    async function qualityConfigNode(tag, name) {
+      try {
+        const r = await fetch('/api/nodes/' + encodeURIComponent(tag) + '/quality', {method:'POST'});
+        const d = await r.json();
+        if (d.error) {
+          showToast(`${name} 质量检查失败: ${d.error}`, 'error');
+        } else {
+          const q = d.quality || {};
+          showToast(`${name} ${qualityTypeLabel(q.proxy_type)} ${q.exit_ip || ''}`);
+          refresh();
+          loadConfigNodes(configNodesPage);
+        }
+      } catch(e) {
+        showToast(`${name} 质量检查失败: ${e.message}`, 'error');
+      }
+    }
+
+    function reloadNeededForConfigNode(name) {
+      showToast(`${name} 还没进入运行时，请先点击“重载核心”后再测试`, 'error');
+    }
+
+    function closeConfigActionMenus() {
+      document.querySelectorAll('.action-dropdown.open').forEach(el => el.classList.remove('open'));
+    }
+
+    document.getElementById('configNodesTableBody')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.config-node-action');
+      if (!btn) return;
+      const action = btn.dataset.action || '';
+      const tag = btn.dataset.tag || '';
+      const name = btn.dataset.name || '';
+      const text = btn.dataset.text || '';
+      if (action === 'toggle-menu') {
+        const wrap = btn.closest('.action-dropdown');
+        const willOpen = !wrap?.classList.contains('open');
+        closeConfigActionMenus();
+        if (wrap && willOpen) wrap.classList.add('open');
+        return;
+      }
+      closeConfigActionMenus();
+      if (action === 'probe') return probeConfigNode(tag, name);
+      if (action === 'quality') return qualityConfigNode(tag, name);
+      if (action === 'blacklist') return blacklistNode(tag);
+      if (action === 'release') return releaseNode(tag);
+      if (action === 'edit') return showEditNodeModal(name);
+      if (action === 'delete') return deleteNode(name);
+      if (action === 'reload-needed') return reloadNeededForConfigNode(name);
+      if (action === 'copy-socks') return copyText(text, 'SOCKS5 连接信息');
+      if (action === 'copy-http') return copyText(text, 'HTTP 连接信息');
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.action-dropdown')) closeConfigActionMenus();
+    });
+
+    async function copyText(text, label) {
+      try {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(text);
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.setAttribute('readonly', '');
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          ta.style.pointerEvents = 'none';
+          ta.style.left = '-9999px';
+          ta.style.top = '0';
+          document.body.appendChild(ta);
+          ta.focus();
+          ta.select();
+          ta.setSelectionRange(0, ta.value.length);
+          const ok = document.execCommand('copy');
+          document.body.removeChild(ta);
+          if (!ok) throw new Error('浏览器不支持复制');
+        }
+        showToast(`${label}已复制`);
+      } catch(e) {
+        showToast(`复制失败: ${e.message}`, 'error');
+      }
+    }
+
+    function searchConfigNodes() {
+      loadConfigNodes(1);
+    }
+
+    function resetConfigNodeFilters() {
+      document.getElementById('configNodeKeyword').value = '';
+      document.getElementById('configNodeRegionFilter').value = '';
+      document.getElementById('configNodeSourceFilter').value = 'all';
+      document.getElementById('configNodeStatusFilter').value = 'all';
+      document.getElementById('configNodePageSize').value = '20';
+      loadConfigNodes(1);
+    }
+
+    function changeConfigNodesPage(delta) {
+      const nextPage = configNodesPage + delta;
+      if (nextPage < 1 || nextPage > Math.max(configNodesTotalPages, 1)) return;
+      loadConfigNodes(nextPage);
+    }
+
+    function jumpConfigNodesPage() {
+      const input = document.getElementById('configNodesPageJumpInput');
+      const raw = parseInt(input?.value || '', 10);
+      if (!raw || raw < 1) {
+        showToast('请输入有效页码', 'error');
+        return;
+      }
+      const page = Math.min(raw, Math.max(configNodesTotalPages, 1));
+      loadConfigNodes(page);
+      if (input) input.value = String(page);
+    }
+
+    function setNodeInputMode(mode) {
+      nodeInputMode = mode === 'batch' ? 'batch' : 'single';
+      document.getElementById('nodeSingleFields').style.display = nodeInputMode === 'single' ? 'block' : 'none';
+      document.getElementById('nodeBatchFields').style.display = nodeInputMode === 'batch' ? 'block' : 'none';
+      document.getElementById('nodeModeSingleBtn').classList.toggle('active', nodeInputMode === 'single');
+      document.getElementById('nodeModeBatchBtn').classList.toggle('active', nodeInputMode === 'batch');
+    }
+
+    function toggleSingleNodeCustomURI() {
+      const isCustom = document.getElementById('nodeScheme').value === 'custom';
+      document.getElementById('nodeCustomURIWrap').style.display = isCustom ? 'block' : 'none';
+    }
+
+    function buildSingleNodeURI() {
+      const scheme = document.getElementById('nodeScheme').value;
+      if (scheme === 'custom') {
+        return document.getElementById('nodeCustomUri').value.trim();
+      }
+      const host = document.getElementById('nodeHost').value.trim();
+      const port = parseInt(document.getElementById('nodePort').value) || 0;
+      const user = document.getElementById('nodeUser').value;
+      const pass = document.getElementById('nodePass').value;
+      if (!host) throw new Error('请输入地址/Host');
+      if (!port) throw new Error('请输入端口');
+      let auth = '';
+      if (user || pass) {
+        auth = encodeURIComponent(user || '') + ':' + encodeURIComponent(pass || '') + '@';
+      }
+      return `${scheme}://${auth}${host}:${port}`;
+    }
+
+    function fillSingleNodeFieldsFromURI(uri) {
+      document.getElementById('nodeScheme').value = 'custom';
+      document.getElementById('nodeHost').value = '';
+      document.getElementById('nodePort').value = '';
+      document.getElementById('nodeUser').value = '';
+      document.getElementById('nodePass').value = '';
+      document.getElementById('nodeCustomUri').value = uri || '';
+      try {
+        const u = new URL(uri);
+        if (['socks5:', 'socks:', 'http:', 'https:'].includes(u.protocol)) {
+          document.getElementById('nodeScheme').value = u.protocol === 'socks:' ? 'socks5' : u.protocol.replace(':', '');
+          document.getElementById('nodeHost').value = u.hostname || '';
+          document.getElementById('nodePort').value = u.port || '';
+          document.getElementById('nodeUser').value = decodeURIComponent(u.username || '');
+          document.getElementById('nodePass').value = decodeURIComponent(u.password || '');
+        }
+      } catch(e) {}
+      toggleSingleNodeCustomURI();
+    }
+
+    async function deleteUnhealthyConfigNodes() {
+      const targets = configNodes.filter(n => n.runtime_state === 'unhealthy' || n.runtime_state === 'blacklisted');
+      if (!targets.length) { showToast('当前页没有失效节点'); return; }
+      if (!confirm(`确认删除当前页 ${targets.length} 个失效节点？`)) return;
+      let success = 0;
+      for (const n of targets) {
+        try {
+          const r = await fetch('/api/nodes/config/'+encodeURIComponent(n.name), {method:'DELETE'});
+          if (r.ok) success++;
+        } catch(e){}
+      }
+      showToast(`已删除 ${success}/${targets.length} 个失效节点`);
+      loadConfigNodes(configNodesPage);
+    }
+
+    function showAddNodeModal() {
+      isEditMode=false;
+      document.getElementById('nodeModalTitle').textContent='添加节点';
+      document.getElementById('nodeModeSwitchWrap').style.display = '';
+      setNodeInputMode('single');
+      document.getElementById('nodeName').value='';
+      document.getElementById('nodeUri').value='';
+      document.getElementById('nodeScheme').value='socks5';
+      document.getElementById('nodeHost').value='';
+      document.getElementById('nodePort').value='';
+      document.getElementById('nodeUser').value='';
+      document.getElementById('nodePass').value='';
+      document.getElementById('nodeCustomUri').value='';
+      toggleSingleNodeCustomURI();
+      document.getElementById('nodeEditName').value='';
+      document.getElementById('nodeUriHint').textContent='批量添加支持一行一个 URI；如果填写名称，会自动生成名称前缀编号。';
+      document.getElementById('nodeModalOverlay').classList.add('show');
+    }
     function showEditNodeModal(name) { 
       const n = configNodes.find(x=>x.name===name); if(!n) return;
       isEditMode=true; document.getElementById('nodeModalTitle').textContent='编辑节点';
-      document.getElementById('nodeName').value=n.name; document.getElementById('nodeUri').value=n.uri; document.getElementById('nodePort').value=n.port||''; document.getElementById('nodeEditName').value=n.name;
+      document.getElementById('nodeModeSwitchWrap').style.display = 'none';
+      setNodeInputMode('single');
+      document.getElementById('nodeName').value=n.name;
+      document.getElementById('nodeUri').value=n.uri;
+      fillSingleNodeFieldsFromURI(n.uri);
+      if ((document.getElementById('nodeScheme').value === 'socks5' || document.getElementById('nodeScheme').value === 'http' || document.getElementById('nodeScheme').value === 'https') && n.port) {
+        document.getElementById('nodePort').value=n.port||'';
+      }
+      document.getElementById('nodeEditName').value=n.name;
+      document.getElementById('nodeUriHint').textContent='编辑模式仅支持单个节点；普通 SOCKS/HTTP 可直接改 host / port / user / pass。';
       document.getElementById('nodeModalOverlay').classList.add('show');
+    }
+    function generateBatchNodeName(baseName, index, total) {
+      if (!baseName) return '';
+      const width = String(total).length < 2 ? 2 : String(total).length;
+      return `${baseName}-${String(index + 1).padStart(width, '0')}`;
     }
     async function handleNodeSubmit(e) {
       e.preventDefault();
-      const p = { name: document.getElementById('nodeName').value, uri: document.getElementById('nodeUri').value, port: parseInt(document.getElementById('nodePort').value)||0 };
       try {
         const editName = document.getElementById('nodeEditName').value;
-        const url = isEditMode ? '/api/nodes/config/'+encodeURIComponent(editName) : '/api/nodes/config';
-        const method = isEditMode ? 'PUT' : 'POST';
-        const r = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(p)});
-        if(r.ok) { document.getElementById('nodeModalOverlay').classList.remove('show'); showToast('成功'); loadConfigNodes(); } else { const d = await r.json(); showToast(d.error, 'error'); }
+        const nodeName = document.getElementById('nodeName').value.trim();
+        const nodeURIs = nodeInputMode === 'batch'
+          ? document.getElementById('nodeUri').value.split('\n').map(s => s.trim()).filter(Boolean)
+          : [buildSingleNodeURI()];
+        const nodePort = nodeInputMode === 'single' ? (parseInt(document.getElementById('nodePort').value)||0) : 0;
+        if (!nodeURIs.length) { showToast(nodeInputMode === 'batch' ? '请至少输入一个 URI' : '请完整填写节点信息', 'error'); return; }
+
+        if (isEditMode) {
+          const p = { name: nodeName, uri: nodeURIs[0], port: nodePort };
+          const url = '/api/nodes/config/'+encodeURIComponent(editName);
+          const r = await fetch(url, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(p)});
+          if(r.ok) { document.getElementById('nodeModalOverlay').classList.remove('show'); showToast('更新成功'); loadConfigNodes(); }
+          else { const d = await r.json(); showToast(d.error, 'error'); }
+          return;
+        }
+
+        let success = 0;
+        const errors = [];
+        for (let i = 0; i < nodeURIs.length; i++) {
+          const p = {
+            name: nodeURIs.length > 1 ? generateBatchNodeName(nodeName, i, nodeURIs.length) : nodeName,
+            uri: nodeURIs[i],
+            port: nodeURIs.length > 1 ? 0 : nodePort
+          };
+          const r = await fetch('/api/nodes/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(p)});
+          if (r.ok) {
+            success++;
+          } else {
+            let msg = '未知错误';
+            try { const d = await r.json(); msg = d.error || msg; } catch(e){}
+            errors.push(`第 ${i + 1} 条: ${msg}`);
+          }
+        }
+        if (success > 0) {
+          document.getElementById('nodeModalOverlay').classList.remove('show');
+          loadConfigNodes();
+        }
+        if (!errors.length) showToast(nodeURIs.length > 1 ? `批量添加成功，共 ${success} 个` : '添加成功');
+        else showToast(`成功 ${success} 个，失败 ${errors.length} 个：${errors[0]}`, success > 0 ? 'success' : 'error');
       } catch(e){}
+    }
+    async function testNodeDraft() {
+      try {
+        if (nodeInputMode !== 'single') {
+          showToast('测试代理仅支持单个添加模式', 'error');
+          return;
+        }
+        const uri = buildSingleNodeURI();
+        if (!uri) {
+          showToast('请先填写完整代理信息', 'error');
+          return;
+        }
+        const btn = document.getElementById('nodeTestBtn');
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '测试中...';
+        const r = await fetch('/api/nodes/test', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ uri })
+        });
+        const d = await r.json();
+        if (!r.ok || d.error) {
+          showToast(`测试失败: ${d.error || '未知错误'}`, 'error');
+        } else {
+          showToast(`测试成功，延迟 ${d.latency_ms}ms`);
+        }
+        btn.disabled = false;
+        btn.textContent = original;
+      } catch(e) {
+        const btn = document.getElementById('nodeTestBtn');
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = '测试代理';
+        }
+        showToast(`测试失败: ${e.message}`, 'error');
+      }
     }
     async function deleteNode(name) {
       if(!confirm('Delete '+name+'?')) return;
@@ -1358,24 +2684,48 @@
         document.getElementById('debugTotalCalls').textContent = d.total_calls||0;
         document.getElementById('debugTotalSuccess').textContent = d.total_success||0;
         document.getElementById('debugSuccessRate').textContent = (d.success_rate||0).toFixed(1)+'%';
-        const tb = document.getElementById('debugNodesTableBody');
-        tb.innerHTML = (d.nodes||[]).map(n => {
-          const calls = (n.success_count||0)+(n.failure_count||0);
-          const sr = calls>0 ? ((n.success_count||0)/calls*100).toFixed(1) : 0;
-          const tl = (n.timeline||[]).map(t => `<div class="tl-dot ${t.success?'success':'error'}" title="${t.latency_ms}ms"></div>`).join('');
-          return `<tr>
-            <td><strong>${escapeHtml(n.name)}</strong><br><span style="font-size:11px;color:var(--text-muted)">${escapeHtml(n.tag)}</span></td>
-            <td class="tt-mono ${sr>80?'':'badge-error'}">${sr}%</td>
-            <td class="tt-mono"><span style="color:var(--success)">${n.success_count||0}</span> / <span style="color:var(--error)">${n.failure_count||0}</span></td>
-            <td class="tt-mono">${n.active_connections||0}</td>
-            <td><div class="timeline">${tl||'-'}</div></td>
-          </tr>`
-        }).join('');
-        
         window._debugNodes = d.nodes || [];
+        renderDebugNodesPage();
         updateDebugCharts(d.success_rate || 0);
 
       } catch(e){}
+    }
+
+    function renderDebugNodesPage() {
+      const tb = document.getElementById('debugNodesTableBody');
+      const allNodes = window._debugNodes || [];
+      debugNodesPageSize = parseInt(document.getElementById('debugNodesPageSize')?.value || debugNodesPageSize || 20) || 20;
+      debugNodesTotal = allNodes.length;
+      debugNodesTotalPages = Math.max(1, Math.ceil(debugNodesTotal / debugNodesPageSize));
+      if (debugNodesPage > debugNodesTotalPages) debugNodesPage = debugNodesTotalPages;
+      if (debugNodesPage < 1) debugNodesPage = 1;
+      const start = (debugNodesPage - 1) * debugNodesPageSize;
+      const pageNodes = allNodes.slice(start, start + debugNodesPageSize);
+
+      tb.innerHTML = pageNodes.map(n => {
+        const calls = (n.success_count||0)+(n.failure_count||0);
+        const sr = calls>0 ? ((n.success_count||0)/calls*100).toFixed(1) : 0;
+        const tl = (n.timeline||[]).map(t => `<div class="tl-dot ${t.success?'success':'error'}" title="${t.latency_ms}ms"></div>`).join('');
+        return `<tr>
+          <td><strong>${escapeHtml(n.name)}</strong><br><span style="font-size:11px;color:var(--text-muted)">${escapeHtml(n.tag)}</span></td>
+          <td class="tt-mono ${sr>80?'':'badge-error'}">${sr}%</td>
+          <td class="tt-mono"><span style="color:var(--success)">${n.success_count||0}</span> / <span style="color:var(--error)">${n.failure_count||0}</span></td>
+          <td class="tt-mono">${n.active_connections||0}</td>
+          <td><div class="timeline">${tl||'-'}</div></td>
+        </tr>`
+      }).join('');
+
+      document.getElementById('debugNodesPageInfo').textContent = `共 ${debugNodesTotal} 条`;
+      document.getElementById('debugNodesPageText').textContent = `第 ${debugNodesPage} / ${debugNodesTotalPages} 页`;
+      document.getElementById('debugNodesPrevBtn').disabled = debugNodesPage <= 1;
+      document.getElementById('debugNodesNextBtn').disabled = debugNodesPage >= debugNodesTotalPages;
+    }
+
+    function changeDebugNodesPage(delta) {
+      const nextPage = debugNodesPage + delta;
+      if (nextPage < 1 || nextPage > Math.max(debugNodesTotalPages, 1)) return;
+      debugNodesPage = nextPage;
+      renderDebugNodesPage();
     }
 
     function updateDebugCharts(globalRate) {
@@ -1466,7 +2816,12 @@
         // Management
         const mgmt = d.management || {};
         document.getElementById('settingMgmtListen').value = mgmt.listen || '';
-        document.getElementById('settingMgmtPassword').value = mgmt.password || '';
+        document.getElementById('settingHealthCheckInterval').value = mgmt.health_check_interval || '5m';
+        document.getElementById('settingMgmtAPIKey').value = mgmt.api_key || '';
+        document.getElementById('settingQualityEnabled').checked = mgmt.quality_enabled !== false;
+        document.getElementById('settingQualityProvider').value = mgmt.quality_provider || 'ipinfo_dkly';
+        document.getElementById('settingQualityAPIKey').value = mgmt.quality_api_key || '';
+        document.getElementById('settingQualityCacheTTL').value = mgmt.quality_cache_ttl || '6h';
         // GeoIP
         const geo = d.geoip || {};
         document.getElementById('settingGeoIPEnabled').checked = geo.enabled || false;
@@ -1497,6 +2852,7 @@
         } catch(e){}
         // Take core snapshot after all fields are populated
         _savedCoreSnapshot = _buildCoreSnapshot();
+        renderAPIDocs();
       } catch(e){ console.error('Failed to load settings:', e); }
     }
     function _buildCoreSnapshot() {
@@ -1517,7 +2873,12 @@
         pool_failure: document.getElementById('settingPoolFailure').value,
         pool_blacklist: document.getElementById('settingPoolBlacklist').value,
         mgmt_listen: document.getElementById('settingMgmtListen').value,
-        mgmt_password: document.getElementById('settingMgmtPassword').value,
+        health_check_interval: document.getElementById('settingHealthCheckInterval').value,
+        mgmt_api_key: document.getElementById('settingMgmtAPIKey').value,
+        quality_enabled: document.getElementById('settingQualityEnabled').checked,
+        quality_provider: document.getElementById('settingQualityProvider').value,
+        quality_api_key: document.getElementById('settingQualityAPIKey').value,
+        quality_cache_ttl: document.getElementById('settingQualityCacheTTL').value,
         geoip_enabled: document.getElementById('settingGeoIPEnabled').checked,
         geoip_db: document.getElementById('settingGeoIPDBPath').value,
         geoip_listen: document.getElementById('settingGeoIPListen').value,
@@ -1534,6 +2895,34 @@
     function toggleLogFileSettings() {
       const output = document.getElementById('settingLogOutput').value;
       document.getElementById('logFileSettings').style.display = output === 'file' ? 'grid' : 'none';
+    }
+
+    function renderAPIDocs() {
+      const base = window.location.origin || '';
+      const key = document.getElementById('settingMgmtAPIKey')?.value || '123';
+      const withAPIKey = (path) => {
+        const sep = path.includes('?') ? '&' : '?';
+        return `${base}${path}${sep}apikey=${encodeURIComponent(key)}`;
+      };
+      const setText = (id, text) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
+      };
+      setText('apiDocAuthExample',
+`curl "${withAPIKey('/api/nodes')}"
+curl "${withAPIKey('/api/proxy/random')}"`);
+      setText('apiDocRandomExample',
+`curl "${withAPIKey('/api/proxy/random?scheme=socks5')}"
+curl "${withAPIKey('/api/proxy/random?scheme=all&format=json')}"`);
+      setText('apiDocFixedExample',
+`curl "${withAPIKey('/api/proxy/fixed?name=node-1')}"
+curl "${withAPIKey('/api/proxy/fixed?port=24000')}"`);
+      setText('apiDocPoolExample',
+`curl "${withAPIKey('/api/proxy/pool')}"
+curl "${withAPIKey('/api/proxy/pool?scheme=all&format=json')}"`);
+      setText('apiDocExportExample',
+`curl "${withAPIKey('/api/export?scheme=socks5')}"
+curl "${withAPIKey('/api/export?scheme=all')}"`);
     }
 
     async function handleSettingsSave(e) {
@@ -1582,7 +2971,12 @@
           },
           management: {
             listen: document.getElementById('settingMgmtListen').value,
-            password: document.getElementById('settingMgmtPassword').value,
+            health_check_interval: document.getElementById('settingHealthCheckInterval').value || '5m',
+            api_key: document.getElementById('settingMgmtAPIKey').value,
+            quality_enabled: document.getElementById('settingQualityEnabled').checked,
+            quality_provider: document.getElementById('settingQualityProvider').value,
+            quality_api_key: document.getElementById('settingQualityAPIKey').value,
+            quality_cache_ttl: document.getElementById('settingQualityCacheTTL').value || '6h',
           },
           log: {
             output: document.getElementById('settingLogOutput').value,
@@ -1740,11 +3134,35 @@
       syncToggleButton(mode);
     })();
 
+    (function initSidebar() {
+      setSidebarCollapsed(localStorage.getItem('sidebarCollapsed') === '1');
+    })();
+
+    document.getElementById('configNodeKeyword')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') searchConfigNodes();
+    });
+    document.getElementById('settingMgmtAPIKey')?.addEventListener('input', renderAPIDocs);
+    document.getElementById('configNodesPageJumpInput')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') jumpConfigNodesPage();
+    });
+    document.getElementById('monitorNodePageSize')?.addEventListener('change', () => {
+      monitorNodesPage = 1;
+      refresh();
+    });
+    document.getElementById('configNodeSourceFilter')?.addEventListener('change', () => loadConfigNodes(1));
+    document.getElementById('configNodeStatusFilter')?.addEventListener('change', () => loadConfigNodes(1));
+    document.getElementById('configNodeRegionFilter')?.addEventListener('change', () => loadConfigNodes(1));
+    document.getElementById('configNodePageSize')?.addEventListener('change', () => loadConfigNodes(1));
+    document.getElementById('debugNodesPageSize')?.addEventListener('change', () => {
+      debugNodesPage = 1;
+      renderDebugNodesPage();
+    });
+
     // Init App
     checkAuth().then(ok => { if(ok) { refresh(); startAutoRefresh(); } });
 
     // Fetch GitHub stars
-    fetch('https://api.github.com/repos/jasonwong1991/easy_proxies')
+    fetch('https://api.github.com/repos/amberpepper/ProxyWeave')
       .then(r => r.json())
       .then(d => { if(d.stargazers_count !== undefined) document.getElementById('githubStars').textContent = d.stargazers_count; })
       .catch(() => {});

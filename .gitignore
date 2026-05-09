@@ -1,8 +1,10 @@
-# Binaries
-easy-proxies
-easy-proxies-*
-easy_proxies
-easy_proxies-*
+# Binaries (repo root)
+/proxyweave
+/proxyweave-*
+/easy_proxies
+/easy_proxies-*
+/easy-proxies
+/easy-proxies-*
 *.exe
 
 # Configuration (contains sensitive data)

@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"easy_proxies/internal/boxmgr"
-	"easy_proxies/internal/config"
-	"easy_proxies/internal/monitor"
+	"proxyweave/internal/boxmgr"
+	"proxyweave/internal/config"
+	"proxyweave/internal/monitor"
 )
 
 // Logger defines logging interface.
@@ -375,6 +375,7 @@ func (m *Manager) doRefresh() {
 
 	// Create new config with updated nodes
 	newCfg := m.createNewConfig(nodes)
+	newCfg.SuppressStartupHealthCheck = true
 
 	// Trigger BoxManager reload with port preservation
 	if err := m.boxMgr.ReloadWithPortMap(newCfg, portMap); err != nil {
@@ -557,35 +558,74 @@ func (m *Manager) createNewConfig(nodes []config.NodeConfig) *config.Config {
 	// Deep copy base config
 	newCfg := *m.baseCfg
 
-	// Assign port numbers to nodes in multi-port mode
-	if newCfg.Mode == "multi-port" {
+	// Keep manually managed nodes (for example nodes added from WebUI) when
+	// refreshing subscriptions. Subscription nodes are replaced by the newly
+	// fetched subscription content.
+	manualNodes := make([]config.NodeConfig, 0, len(m.baseCfg.Nodes))
+	for _, node := range m.baseCfg.Nodes {
+		if node.Source != config.NodeSourceSubscription {
+			manualNodes = append(manualNodes, node)
+		}
+	}
+
+	for i := range nodes {
+		nodes[i].Source = config.NodeSourceSubscription
+	}
+	allNodes := append(manualNodes, nodes...)
+
+	// Assign port numbers to nodes in multi-port/hybrid mode.
+	if newCfg.Mode == "multi-port" || newCfg.Mode == "hybrid" {
+		used := make(map[uint16]struct{}, len(allNodes))
+		if newCfg.Mode == "hybrid" && newCfg.Listener.Port > 0 {
+			used[newCfg.Listener.Port] = struct{}{}
+		}
+		for _, node := range allNodes {
+			if node.Port > 0 {
+				used[node.Port] = struct{}{}
+			}
+		}
 		portCursor := newCfg.MultiPort.BasePort
-		for i := range nodes {
-			nodes[i].Port = portCursor
-			portCursor++
+		if portCursor == 0 {
+			portCursor = 24000
+		}
+		for i := range allNodes {
+			if allNodes[i].Port == 0 {
+				for {
+					if _, exists := used[portCursor]; !exists && portCursor != 0 {
+						break
+					}
+					portCursor++
+					if portCursor == 0 {
+						portCursor = 1
+					}
+				}
+				allNodes[i].Port = portCursor
+				used[portCursor] = struct{}{}
+				portCursor++
+			}
 			// Apply default credentials
-			if nodes[i].Username == "" {
-				nodes[i].Username = newCfg.MultiPort.Username
-				nodes[i].Password = newCfg.MultiPort.Password
+			if allNodes[i].Username == "" {
+				allNodes[i].Username = newCfg.MultiPort.Username
+				allNodes[i].Password = newCfg.MultiPort.Password
 			}
 		}
 	}
 
 	// Process node names
-	for i := range nodes {
-		nodes[i].Name = strings.TrimSpace(nodes[i].Name)
-		nodes[i].URI = strings.TrimSpace(nodes[i].URI)
+	for i := range allNodes {
+		allNodes[i].Name = strings.TrimSpace(allNodes[i].Name)
+		allNodes[i].URI = strings.TrimSpace(allNodes[i].URI)
 
 		// Auto-extract name from URI if not provided
-		if nodes[i].Name == "" {
-			nodes[i].Name = config.ExtractNodeName(nodes[i].URI)
+		if allNodes[i].Name == "" {
+			allNodes[i].Name = config.ExtractNodeName(allNodes[i].URI)
 		}
-		if nodes[i].Name == "" {
-			nodes[i].Name = fmt.Sprintf("node-%d", i)
+		if allNodes[i].Name == "" {
+			allNodes[i].Name = fmt.Sprintf("node-%d", i)
 		}
 	}
 
-	newCfg.Nodes = nodes
+	newCfg.Nodes = allNodes
 	return &newCfg
 }
 

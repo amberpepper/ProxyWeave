@@ -2,9 +2,9 @@ package geoip
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
-	"context"
 	"fmt"
 	"io"
 	"log"
@@ -13,9 +13,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/oschwald/geoip2-golang"
 )
@@ -606,71 +608,85 @@ func extractSSRHost(uri string) string {
 	return ""
 }
 
-// isoCodeToRegion maps ISO country codes to our region codes
+// isoCodeToRegion normalizes ISO country codes to internal region keys.
+// Known country codes are stored as lowercase ISO-3166 alpha-2 values (e.g. "jp", "us", "de").
+// Unknown / empty values fall back to "other".
 func isoCodeToRegion(isoCode string) string {
-	switch strings.ToUpper(isoCode) {
-	case "JP":
-		return RegionJP
-	case "KR":
-		return RegionKR
-	case "US":
-		return RegionUS
-	case "HK":
-		return RegionHK
-	case "TW":
-		return RegionTW
-	case "SG":
-		return RegionSG
-	default:
+	code := strings.ToUpper(strings.TrimSpace(isoCode))
+	if len(code) != 2 {
 		return RegionOther
 	}
+	for _, r := range code {
+		if r < 'A' || r > 'Z' {
+			return RegionOther
+		}
+	}
+	return strings.ToLower(code)
 }
 
-// AllRegions returns all supported region codes
+// AllRegions returns the built-in compatibility region codes.
+// Dynamic country routing should prefer SortedRegionCodes over this helper.
 func AllRegions() []string {
 	return []string{RegionJP, RegionKR, RegionUS, RegionHK, RegionTW, RegionSG, RegionOther}
 }
 
+// SortedRegionCodes returns a stable, sorted region code list from the provided set/map keys.
+// "other" is always placed last.
+func SortedRegionCodes[T any](regions map[string]T) []string {
+	if len(regions) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(regions))
+	for region := range regions {
+		region = strings.ToLower(strings.TrimSpace(region))
+		if region == "" {
+			continue
+		}
+		out = append(out, region)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i] == RegionOther {
+			return false
+		}
+		if out[j] == RegionOther {
+			return true
+		}
+		return out[i] < out[j]
+	})
+	return out
+}
+
 // RegionName returns the display name for a region code
 func RegionName(code string) string {
-	switch code {
-	case RegionJP:
-		return "Japan"
-	case RegionKR:
-		return "Korea"
-	case RegionUS:
-		return "USA"
-	case RegionHK:
-		return "Hong Kong"
-	case RegionTW:
-		return "Taiwan"
-	case RegionSG:
-		return "Singapore"
-	case RegionOther:
+	normalizedLower := strings.ToLower(strings.TrimSpace(code))
+	if normalizedLower == RegionOther {
 		return "Other"
-	default:
-		return "Unknown"
 	}
+	normalized := strings.ToUpper(strings.TrimSpace(code))
+	if len(normalized) == 2 {
+		return normalized
+	}
+	return "Unknown"
+}
+
+// CountryFlagEmoji converts ISO-3166 alpha-2 country code to flag emoji.
+func CountryFlagEmoji(countryCode string) string {
+	code := strings.ToUpper(strings.TrimSpace(countryCode))
+	if len(code) != 2 {
+		return "🌍"
+	}
+	r1, size1 := utf8.DecodeRuneInString(code)
+	r2, _ := utf8.DecodeRuneInString(code[size1:])
+	if r1 < 'A' || r1 > 'Z' || r2 < 'A' || r2 > 'Z' {
+		return "🌍"
+	}
+	return string(rune(r1-'A'+0x1F1E6)) + string(rune(r2-'A'+0x1F1E6))
 }
 
 // RegionEmoji returns the flag emoji for a region code
 func RegionEmoji(code string) string {
-	switch code {
-	case RegionJP:
-		return "🇯🇵"
-	case RegionKR:
-		return "🇰🇷"
-	case RegionUS:
-		return "🇺🇸"
-	case RegionHK:
-		return "🇭🇰"
-	case RegionTW:
-		return "🇹🇼"
-	case RegionSG:
-		return "🇸🇬"
-	case RegionOther:
+	if strings.ToLower(strings.TrimSpace(code)) == RegionOther {
 		return "🌍"
-	default:
-		return "❓"
 	}
+	return CountryFlagEmoji(code)
 }

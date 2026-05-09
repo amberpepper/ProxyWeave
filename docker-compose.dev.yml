@@ -1,19 +1,19 @@
 services:
-  easy_proxies:
+  proxyweave:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        GOPROXY: https://goproxy.cn,direct
-    image: easy_proxies:dev
-    container_name: easy_proxies_dev
+    image: proxyweave:dev
+    container_name: proxyweave_dev
     restart: unless-stopped
+    # 说明：当前 Dockerfile 仅封装预编译二进制。
+    # 本地 compose build 前请先准备：release/linux/<arch>/proxyweave
     # macOS 不支持 network_mode: host，必须使用端口映射
     ports:
       - "2323:2323"       # Pool 入口
       - "9091:9091"       # WebUI
       - "24000-24100:24000-24100"  # Multi-port
     volumes:
-      - ./config.yaml:/etc/easy_proxies/config.yaml
-      - ./nodes.txt:/etc/easy_proxies/nodes.txt
+      - ./config.yaml:/etc/proxyweave/config.yaml
+      - ./nodes.txt:/etc/proxyweave/nodes.txt
       - ./logs:/app/logs

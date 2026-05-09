@@ -1,45 +1,43 @@
-# Easy Proxies
+# ProxyWeave
 
 [English](README.md) | 简体中文
 
-Easy Proxies 是一个基于 sing-box 的代理池管理工具。
+一个基于 sing-box 的代理池管理工具。
 
-目标是把大量上游节点统一成稳定的本地 HTTP/SOCKS5 代理入口，同时支持按节点独立端口访问。
+## 致谢与项目来源
 
-## 当前能力
+本项目基于 [jasonwong1991/easy_proxies](https://github.com/jasonwong1991/easy_proxies)
+进行二次开发。
 
-- 运行模式：`pool`、`multi-port`、`hybrid`。
-- 实际构建的上游协议：`vmess`、`vless`、`trojan`、`ss/shadowsocks`、`hysteria2/hy2`、`socks5/socks`、`http/https`、`anytls`、`tuic`。
-- 节点来源：
-  - `config.yaml` 的 `nodes`
-  - `nodes_file`（每行一个 URI）
-  - `subscriptions`（支持 Base64/纯文本/Clash YAML 解析）
-- 自动健康检查、失败熔断和黑名单恢复。
-- Web 管理面板 + API：
-  - 节点状态/探测/导出
-  - **手动拉黑/解封节点**
-  - 动态设置（`external_ip`、`probe_target`、`skip_cert_verify`、`geoip`）
-  - 节点配置增删改查 + 重载
-  - 订阅状态查询 + 手动刷新 + **保存即时生效**
-  - **实时日志控制台**（最近 1000 行，WebSocket 流式传输）
-- 新增可配置 DNS 解析器（对 VMess 域名节点非常关键）。
-- 可选 GeoIP 标记（支持 JP/KR/US/HK/TW/SG 地域分区，可在 WebUI 中开关，支持自动更新和热重载）。
-- **可配置日志轮转**，支持大小限制、备份数量和压缩。
+原作者： [jasonwong1991](https://github.com/jasonwong1991)
 
-## 快速开始
+当前维护项目： [amberpepper/ProxyWeave](https://github.com/amberpepper/ProxyWeave)
 
-### 1）准备配置
+## 主要特性
+
+当前版本主要包含：
+
+- Web 管理面板（`/`）与管理 API（`/api/*`）
+- 实时流量带宽图（SSE，`/api/traffic`）与日志控制台（`/api/logs`）
+- 节点配置管理（增删改查）、单节点探测、批量探测、手动拉黑/解封
+- 订阅管理与定时刷新，刷新后热重载
+- GeoIP 分区路由（如 `/jp`、`/us`）及 GeoLite2 自动更新
+- 运行时设置保存（写回 `config.yaml`）、日志轮转配置
+
+## 安装
 
 ```bash
+git clone https://github.com/amberpepper/ProxyWeave.git
+cd ProxyWeave
 cp config.example.yaml config.yaml
-cp nodes.example nodes.txt
+touch nodes.txt
 ```
 
 编辑 `config.yaml`，并配置节点来源（`nodes.txt` / `subscriptions` / `nodes`）。
 
-### 2）启动
+## 启动
 
-Docker：
+### Docker（推荐）
 
 ```bash
 ./start.sh
@@ -47,135 +45,19 @@ Docker：
 docker compose up -d
 ```
 
-本地运行：
+### 本地运行
 
 ```bash
-go run ./cmd/easy_proxies -config config.yaml
+go run -tags "with_utls with_quic with_grpc with_wireguard with_gvisor with_clash_api" ./cmd/proxyweave -config config.yaml
 ```
 
-## 最小配置示例（Pool）
+## 访问
 
-```yaml
-mode: pool
+- WebUI：`http://localhost:9091`
+- 默认代理入口（pool）：`127.0.0.1:2323`
 
-listener:
-  address: 0.0.0.0
-  port: 2323
-  username: user
-  password: pass
-
-pool:
-  mode: sequential    # sequential / random / balance
-  failure_threshold: 3
-  blacklist_duration: 24h
-
-management:
-  enabled: true
-  listen: 0.0.0.0:9091
-  probe_target: http://cp.cloudflare.com/generate_204
-  password: ""
-
-dns:
-  server: 223.5.5.5
-  port: 53
-  strategy: prefer_ipv4
-
-nodes_file: nodes.txt
-```
-
-## DNS 配置说明
-
-`dns` 会同时影响 sing-box DNS 客户端和 VMess 域名拨号解析：
-
-```yaml
-dns:
-  server: 223.5.5.5
-  fallback_servers:    # 备用 DNS 服务器（主 DNS 解析失败时使用）
-    - 8.8.8.8
-    - 1.1.1.1
-  port: 53
-  strategy: prefer_ipv4
-```
-
-`strategy` 可选值：
-
-- `as_is`
-- `prefer_ipv4`
-- `prefer_ipv6`
-- `ipv4_only`
-- `ipv6_only`
-
-如果日志中出现 `lookup <domain>: empty result`，请优先检查该 DNS 配置是否可达且策略合理。
-
-## 运行模式
-
-- `pool`：所有节点共享一个本地 HTTP/SOCKS5 入口。
-- `multi-port`：每个节点一个独立本地 HTTP/SOCKS5 端口。
-- `hybrid`：同时启用 pool + multi-port。
-
-## 节点来源行为
-
-- 配置了 `subscriptions` 时：
-  - 会抓取订阅节点并追加到运行节点列表
-  - `nodes_file` 作为订阅节点写入路径
-  - 启动阶段不再从 `nodes_file` 读取节点
-- `nodes`（内联节点）只要存在就会参与运行。
-
-## 协议支持注意事项
-
-运行时真正支持的协议：
-
-- `vmess`
-- `vless`
-- `trojan`
-- `ss` / `shadowsocks`
-- `hysteria2` / `hy2`
-- `socks5` / `socks`
-- `http` / `https`
-- `anytls`
-- `tuic`
-
-订阅解析阶段可能识别到更多 URI 前缀（兼容输入），但不在上述列表中的协议会在构建阶段被跳过。
-
-## 管理 API（核心）
-
-- `POST /api/auth`
-- `GET|PUT /api/settings`
-- `GET /api/nodes`
-- `POST /api/nodes/{tag}/probe`
-- `POST /api/nodes/{tag}/release`
-- `POST /api/nodes/{tag}/blacklist`
-- `POST /api/nodes/probe-all`（SSE）
-- `GET /api/export`
-- `GET|PUT /api/subscription/config`
-- `GET|POST /api/subscription/status|refresh`
-- `GET|POST|PUT|DELETE /api/nodes/config[...]`
-- `POST /api/reload`
-
-`management.password` 为空时，Web/API 不要求登录。
-
-## 重要运行说明
-
-- 重载（`/api/reload` 或订阅刷新）会中断现有连接。
-- Settings API 会把配置写回 `config.yaml`；部分设置需要重载后才能完全生效。
-- 省略项默认值可在 `internal/config/config.go` 中查看。
-- 日志轮转通过 `log` 配置段设置；当 `output: file` 时，日志同时写入控制台和文件，并自动轮转。
-
-## 更新日志
-
-详见 [CHANGELOG.md](CHANGELOG.md)。
-
-## 开发验证
+## 停止
 
 ```bash
-go test ./...
+docker compose down
 ```
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=jasonwong1991/easy_proxies&type=Date)](https://star-history.com/#jasonwong1991/easy_proxies&Date)
-
-## 许可证
-
-MIT License
-

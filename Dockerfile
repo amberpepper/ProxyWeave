@@ -1,25 +1,31 @@
-FROM --platform=$BUILDPLATFORM golang:1.24 AS builder
-ARG TARGETARCH
-WORKDIR /src
-COPY go.mod go.sum ./
-ARG GOPROXY=https://proxy.golang.org,direct
-RUN go env -w GOPROXY=${GOPROXY} && go mod download
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -tags "with_utls with_quic with_grpc with_wireguard with_gvisor with_clash_api" -o easy_proxies ./cmd/easy_proxies
-
 FROM debian:bookworm-slim AS runtime
+
+ARG TARGETARCH
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates gosu \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -r -u 10001 easy \
-    && mkdir -p /etc/easy_proxies \
-    && chown -R easy:easy /etc/easy_proxies
+    && mkdir -p /etc/proxyweave \
+    && chown -R easy:easy /etc/proxyweave
+
 WORKDIR /app
-COPY --from=builder /src/easy_proxies /usr/local/bin/easy_proxies
-COPY --chown=easy:easy config.example.yaml /etc/easy_proxies/config.yaml
+
+# CI 预先构建好多架构二进制后放入 release/linux/<arch>/proxyweave
+# Docker 镜像只做运行时封装，不在镜像内编译 Go。
+COPY release/linux/ /tmp/release/linux/
+RUN set -eux; \
+    cp "/tmp/release/linux/${TARGETARCH}/proxyweave" /usr/local/bin/proxyweave; \
+    chmod 0755 /usr/local/bin/proxyweave; \
+    rm -rf /tmp/release
+
+COPY --chown=easy:easy config.example.yaml /etc/proxyweave/config.yaml
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
-# Pool/Hybrid mode: 2323, Management: 9091, Multi-port/Hybrid mode: 24000-24200
-EXPOSE 2323 9091 24000-24200
+
+# 固定入口端口：Pool/Hybrid 2323, Management 9091
+# 多端口模式端口范围按运行配置决定，建议在 compose / run 时显式映射。
+EXPOSE 2323 9091
+
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["--config", "/etc/easy_proxies/config.yaml"]
+CMD ["--config", "/etc/proxyweave/config.yaml"]

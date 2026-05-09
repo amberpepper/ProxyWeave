@@ -36,13 +36,14 @@ type Config struct {
 	LogLevel            string                    `yaml:"log_level"`
 	SkipCertVerify      bool                      `yaml:"skip_cert_verify"` // 全局跳过 SSL 证书验证
 
-	filePath string `yaml:"-"` // 配置文件路径，用于保存
+	filePath                   string `yaml:"-"` // 配置文件路径，用于保存
+	SuppressStartupHealthCheck bool   `yaml:"-"` // 仅运行时使用：本次 reload/start 禁止自动启动健康检查
 }
 
 // LogConfig controls log output and rotation.
 type LogConfig struct {
 	Output     string `yaml:"output"`      // 日志输出: "stdout", "file", 默认 "stdout"
-	File       string `yaml:"file"`        // 日志文件路径，默认 "logs/easy_proxies.log"
+	File       string `yaml:"file"`        // 日志文件路径，默认 "logs/proxyweave.log"
 	MaxSize    int    `yaml:"max_size"`    // 单个日志文件最大 MB，默认 50
 	MaxBackups int    `yaml:"max_backups"` // 保留旧日志文件个数，默认 3
 	MaxAge     int    `yaml:"max_age"`     // 保留旧日志文件天数，默认 7
@@ -69,9 +70,11 @@ type ListenerConfig struct {
 
 // PoolConfig configures scheduling + failure handling.
 type PoolConfig struct {
-	Mode              string        `yaml:"mode"`
-	FailureThreshold  int           `yaml:"failure_threshold"`
-	BlacklistDuration time.Duration `yaml:"blacklist_duration"`
+	Mode               string        `yaml:"mode"`
+	FailureThreshold   int           `yaml:"failure_threshold"`
+	BlacklistDuration  time.Duration `yaml:"blacklist_duration"`
+	StartupHealthCheck string        `yaml:"startup_health_check"`
+	MinAvailable       int           `yaml:"min_available"`
 }
 
 // MultiPortConfig defines address/credential defaults for multi-port mode.
@@ -84,10 +87,16 @@ type MultiPortConfig struct {
 
 // ManagementConfig controls the monitoring HTTP endpoint.
 type ManagementConfig struct {
-	Enabled     *bool  `yaml:"enabled"`
-	Listen      string `yaml:"listen"`
-	ProbeTarget string `yaml:"probe_target"`
-	Password    string `yaml:"password"` // WebUI 访问密码，为空则不需要密码
+	Enabled             *bool         `yaml:"enabled"`
+	Listen              string        `yaml:"listen"`
+	ProbeTarget         string        `yaml:"probe_target"`
+	HealthCheckInterval time.Duration `yaml:"health_check_interval"`
+	Password            string        `yaml:"password"` // WebUI 访问密码，为空则不需要密码
+	APIKey              string        `yaml:"api_key"`  // WebUI/API key，可通过 X-API-Key 或 Authorization: Bearer 使用
+	QualityEnabled      *bool         `yaml:"quality_enabled"`
+	QualityProvider     string        `yaml:"quality_provider"`  // ipinfo_dkly / auto / ip-api / ipinfo_lite / off
+	QualityAPIKey       string        `yaml:"quality_api_key"`   // 质量 API Key（dkly / IPinfo Lite）
+	QualityCacheTTL     time.Duration `yaml:"quality_cache_ttl"` // 出口质量信息缓存时间
 }
 
 // SubscriptionRefreshConfig controls subscription auto-refresh and reload settings.
@@ -98,6 +107,7 @@ type SubscriptionRefreshConfig struct {
 	HealthCheckTimeout time.Duration `yaml:"health_check_timeout"` // 新节点健康检查超时
 	DrainTimeout       time.Duration `yaml:"drain_timeout"`        // 旧实例排空超时时间
 	MinAvailableNodes  int           `yaml:"min_available_nodes"`  // 最少可用节点数，低于此值不切换
+	StartupHealthCheck string        `yaml:"startup_health_check"` // 启动时健康检查：always / never / auto
 }
 
 // NodeSource indicates where a node configuration originated from.
@@ -125,11 +135,107 @@ func (n *NodeConfig) NodeKey() string {
 	return n.URI
 }
 
-// Load reads YAML config from disk and applies defaults/validation.
+// DefaultWebConfig returns a minimal web-managed configuration. It contains no
+// upstream nodes, so the WebUI/API can be used to add subscriptions or nodes
+// before starting the proxy runtime.
+func DefaultWebConfig() Config {
+	enabled := true
+	return Config{
+		Mode:      "hybrid",
+		LogLevel:  "info",
+		NodesFile: "nodes.txt",
+		Listener: ListenerConfig{
+			Address: "0.0.0.0",
+			Port:    2323,
+		},
+		Pool: PoolConfig{
+			Mode:              "random",
+			FailureThreshold:  3,
+			BlacklistDuration: 24 * time.Hour,
+		},
+		MultiPort: MultiPortConfig{
+			Address:  "0.0.0.0",
+			BasePort: 24000,
+		},
+		Management: ManagementConfig{
+			Enabled:             &enabled,
+			Listen:              "0.0.0.0:9091",
+			ProbeTarget:         "http://cp.cloudflare.com/generate_204",
+			HealthCheckInterval: 5 * time.Minute,
+			QualityEnabled:      &enabled,
+			QualityProvider:     "ipinfo_dkly",
+			QualityCacheTTL:     7 * 24 * time.Hour,
+		},
+		SubscriptionRefresh: SubscriptionRefreshConfig{
+			Enabled:            false,
+			Interval:           1 * time.Hour,
+			Timeout:            30 * time.Second,
+			HealthCheckTimeout: 60 * time.Second,
+			DrainTimeout:       30 * time.Second,
+			MinAvailableNodes:  1,
+			StartupHealthCheck: "never",
+		},
+		GeoIP: GeoIPConfig{
+			Enabled:            true,
+			DatabasePath:       "./GeoLite2-Country.mmdb",
+			AutoUpdateEnabled:  true,
+			AutoUpdateInterval: 24 * time.Hour,
+		},
+		Log: LogConfig{
+			Output:     "stdout",
+			File:       "logs/proxyweave.log",
+			MaxSize:    50,
+			MaxBackups: 3,
+			MaxAge:     7,
+		},
+	}
+}
+
+func writeInitialConfig(path string, cfg Config) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil && filepath.Dir(path) != "." {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	data, err := yaml.Marshal(&cfg)
+	if err != nil {
+		return fmt.Errorf("encode default config: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write default config: %w", err)
+	}
+	if cfg.NodesFile != "" {
+		nodesPath := cfg.NodesFile
+		if !filepath.IsAbs(nodesPath) {
+			nodesPath = filepath.Join(filepath.Dir(path), nodesPath)
+		}
+		if err := os.MkdirAll(filepath.Dir(nodesPath), 0o755); err != nil && filepath.Dir(nodesPath) != "." {
+			return fmt.Errorf("create nodes dir: %w", err)
+		}
+		f, err := os.OpenFile(nodesPath, os.O_CREATE, 0o644)
+		if err != nil {
+			return fmt.Errorf("create nodes file: %w", err)
+		}
+		_ = f.Close()
+	}
+	return nil
+}
+
+// Load reads YAML config from disk and applies defaults/validation. If the
+// config file does not exist, it creates a minimal WebUI-first config so the
+// service can be bootstrapped entirely from the browser/API.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read config: %w", err)
+		if os.IsNotExist(err) {
+			cfg := DefaultWebConfig()
+			if err := writeInitialConfig(path, cfg); err != nil {
+				return nil, err
+			}
+			log.Printf("✅ Created default web-managed config at %s", path)
+			data, err = os.ReadFile(path)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read config: %w", err)
+		}
 	}
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
@@ -240,6 +346,16 @@ func (c *Config) normalize() error {
 		defaultEnabled := true
 		c.Management.Enabled = &defaultEnabled
 	}
+	if c.Management.QualityEnabled == nil {
+		defaultQualityEnabled := true
+		c.Management.QualityEnabled = &defaultQualityEnabled
+	}
+	if c.Management.QualityProvider == "" {
+		c.Management.QualityProvider = "ipinfo_dkly"
+	}
+	if c.Management.QualityCacheTTL <= 0 {
+		c.Management.QualityCacheTTL = 7 * 24 * time.Hour
+	}
 
 	// Subscription refresh defaults
 	if c.SubscriptionRefresh.Interval <= 0 {
@@ -317,9 +433,8 @@ func (c *Config) normalize() error {
 		}
 	}
 
-	if len(c.Nodes) == 0 {
-		return errors.New("config.nodes cannot be empty (configure nodes in config or use nodes_file)")
-	}
+	// An empty node set is valid in web-managed mode. The management UI/API can
+	// add nodes or subscription URLs and trigger a reload later.
 	portCursor := c.MultiPort.BasePort
 	for idx := range c.Nodes {
 		c.Nodes[idx].Name = strings.TrimSpace(c.Nodes[idx].Name)
@@ -453,6 +568,16 @@ func (c *Config) NormalizeWithPortMap(portMap map[string]uint16) error {
 		defaultEnabled := true
 		c.Management.Enabled = &defaultEnabled
 	}
+	if c.Management.QualityEnabled == nil {
+		defaultQualityEnabled := true
+		c.Management.QualityEnabled = &defaultQualityEnabled
+	}
+	if c.Management.QualityProvider == "" {
+		c.Management.QualityProvider = "ipinfo_dkly"
+	}
+	if c.Management.QualityCacheTTL <= 0 {
+		c.Management.QualityCacheTTL = 7 * 24 * time.Hour
+	}
 	if c.SubscriptionRefresh.Interval <= 0 {
 		c.SubscriptionRefresh.Interval = 1 * time.Hour
 	}
@@ -469,8 +594,9 @@ func (c *Config) NormalizeWithPortMap(portMap map[string]uint16) error {
 		c.SubscriptionRefresh.MinAvailableNodes = 1
 	}
 
+	// Empty node sets are valid while bootstrapping from the WebUI/API.
 	if len(c.Nodes) == 0 {
-		return errors.New("config.nodes cannot be empty")
+		return nil
 	}
 
 	// Build set of ports already assigned from portMap
@@ -550,7 +676,7 @@ func (c *Config) normalizeLogConfig() {
 		c.Log.Output = "stdout"
 	}
 	if c.Log.File == "" {
-		c.Log.File = "logs/easy_proxies.log"
+		c.Log.File = "logs/proxyweave.log"
 	}
 	// Resolve relative log file path against config dir
 	if c.filePath != "" && !filepath.IsAbs(c.Log.File) {
@@ -580,6 +706,9 @@ func (c *Config) ManagementEnabled() bool {
 func loadNodesFromFile(path string) ([]NodeConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	return parseNodesFromContent(string(data))
@@ -670,22 +799,92 @@ func parseNodesFromContent(content string) ([]NodeConfig, error) {
 	lines := strings.Split(content, "\n")
 
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
-
-		// Skip empty lines and comments
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		// Check if it's a valid proxy URI
-		if IsProxyURI(line) {
+		if uri, ok := NormalizeProxyLine(line); ok {
 			nodes = append(nodes, NodeConfig{
-				URI: line,
+				URI: uri,
 			})
 		}
 	}
 
 	return nodes, nil
+}
+
+// NormalizeProxyLine normalizes a plain-text proxy line into a supported URI.
+// Supported inputs:
+// - Existing URI lines such as http://..., socks5://..., vmess://...
+// - Bare HTTP proxy lines such as host:port or host:port:user:pass
+func NormalizeProxyLine(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+
+	// Skip empty lines and comments
+	if line == "" || strings.HasPrefix(line, "#") {
+		return "", false
+	}
+
+	if IsProxyURI(line) {
+		return line, true
+	}
+
+	if uri, ok := parseBareHTTPProxyLine(line); ok {
+		return uri, true
+	}
+
+	return "", false
+}
+
+func parseBareHTTPProxyLine(line string) (string, bool) {
+	if strings.Contains(line, "://") || strings.ContainsAny(line, " \t/?#") {
+		return "", false
+	}
+
+	// Support bracketed IPv6 host: [::1]:8080
+	if strings.HasPrefix(line, "[") {
+		host, port, err := net.SplitHostPort(line)
+		if err != nil || !isValidBareProxyHost(host) || !isValidPort(port) {
+			return "", false
+		}
+		return (&url.URL{
+			Scheme: "http",
+			Host:   net.JoinHostPort(host, port),
+		}).String(), true
+	}
+
+	parts := strings.Split(line, ":")
+	switch len(parts) {
+	case 2:
+		host, port := parts[0], parts[1]
+		if !isValidBareProxyHost(host) || !isValidPort(port) {
+			return "", false
+		}
+		return (&url.URL{
+			Scheme: "http",
+			Host:   net.JoinHostPort(host, port),
+		}).String(), true
+	case 4:
+		host, port, username, password := parts[0], parts[1], parts[2], parts[3]
+		if !isValidBareProxyHost(host) || !isValidPort(port) || username == "" {
+			return "", false
+		}
+		return (&url.URL{
+			Scheme: "http",
+			User:   url.UserPassword(username, password),
+			Host:   net.JoinHostPort(host, port),
+		}).String(), true
+	default:
+		return "", false
+	}
+}
+
+func isValidBareProxyHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	return !strings.ContainsAny(host, "[]@ \t/?#")
+}
+
+func isValidPort(port string) bool {
+	p, err := strconv.Atoi(port)
+	return err == nil && p >= 1 && p <= 65535
 }
 
 // isBase64 checks if a string looks like base64 encoded content (optimized version)

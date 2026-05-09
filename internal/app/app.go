@@ -8,10 +8,11 @@ import (
 	"syscall"
 	"time"
 
-	"easy_proxies/internal/boxmgr"
-	"easy_proxies/internal/config"
-	"easy_proxies/internal/monitor"
-	"easy_proxies/internal/subscription"
+	"proxyweave/internal/boxmgr"
+	"proxyweave/internal/config"
+	"proxyweave/internal/monitor"
+	"proxyweave/internal/outbound/pool"
+	"proxyweave/internal/subscription"
 )
 
 // Run builds the runtime components from config and blocks until shutdown.
@@ -24,14 +25,24 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		proxyPassword = cfg.MultiPort.Password
 	}
 
+	qualityEnabled := true
+	if cfg.Management.QualityEnabled != nil {
+		qualityEnabled = *cfg.Management.QualityEnabled
+	}
 	monitorCfg := monitor.Config{
-		Enabled:       cfg.ManagementEnabled(),
-		Listen:        cfg.Management.Listen,
-		ProbeTarget:   cfg.Management.ProbeTarget,
-		Password:      cfg.Management.Password,
-		ProxyUsername: proxyUsername,
-		ProxyPassword: proxyPassword,
-		ExternalIP:    cfg.ExternalIP,
+		Enabled:             cfg.ManagementEnabled(),
+		Listen:              cfg.Management.Listen,
+		ProbeTarget:         cfg.Management.ProbeTarget,
+		HealthCheckInterval: cfg.Management.HealthCheckInterval,
+		Password:            cfg.Management.Password,
+		APIKey:              cfg.Management.APIKey,
+		ProxyUsername:       proxyUsername,
+		ProxyPassword:       proxyPassword,
+		ExternalIP:          cfg.ExternalIP,
+		QualityEnabled:      qualityEnabled,
+		QualityProvider:     cfg.Management.QualityProvider,
+		QualityAPIKey:       cfg.Management.QualityAPIKey,
+		QualityCacheTTL:     cfg.Management.QualityCacheTTL,
 	}
 
 	// Create and start BoxManager
@@ -44,6 +55,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// Wire up config to monitor server for settings API
 	if server := boxMgr.MonitorServer(); server != nil {
 		server.SetConfig(cfg)
+		server.SetTrafficStatsFn(pool.TrafficStats)
 	}
 
 	// Always create SubscriptionManager so WebUI can hot-reload subscription config

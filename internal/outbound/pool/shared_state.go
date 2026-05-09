@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"easy_proxies/internal/monitor"
+	"proxyweave/internal/monitor"
 )
 
 // sharedMemberState holds failure/blacklist state shared across all pool instances.
@@ -17,6 +17,8 @@ type sharedMemberState struct {
 	blacklistedUntil time.Time
 	entry            atomic.Pointer[monitor.EntryHandle]
 	active           atomic.Int32
+	uploadBytes      atomic.Int64
+	downloadBytes    atomic.Int64
 }
 
 var sharedStateStore sync.Map // map[tag]*sharedMemberState
@@ -162,4 +164,18 @@ func blacklistSharedMember(tag string, duration time.Duration) {
 		state.failures = 0
 		state.mu.Unlock()
 	}
+}
+
+func (s *sharedMemberState) addUpload(n int64)   { s.uploadBytes.Add(n) }
+func (s *sharedMemberState) addDownload(n int64) { s.downloadBytes.Add(n) }
+
+func TrafficStats() map[string][2]int64 {
+	result := make(map[string][2]int64)
+	sharedStateStore.Range(func(key, val any) bool {
+		tag := key.(string)
+		state := val.(*sharedMemberState)
+		result[tag] = [2]int64{state.uploadBytes.Load(), state.downloadBytes.Load()}
+		return true
+	})
+	return result
 }

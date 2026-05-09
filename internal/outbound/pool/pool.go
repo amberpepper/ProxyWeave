@@ -3,16 +3,23 @@ package pool
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net"
+	"net/http"
+	"net/netip"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"easy_proxies/internal/monitor"
+	"proxyweave/internal/config"
+	"proxyweave/internal/monitor"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/outbound"
@@ -33,15 +40,21 @@ const (
 	modeSequential = "sequential"
 	modeRandom     = "random"
 	modeBalance    = "balance"
+
+	qualityProbeHost = "ip-api.com"
 )
+
+var qualityProbeSem = make(chan struct{}, 4)
 
 // Options controls pool outbound behaviour.
 type Options struct {
-	Mode              string
-	Members           []string
-	FailureThreshold  int
-	BlacklistDuration time.Duration
-	Metadata          map[string]MemberMeta
+	Mode               string
+	Members            []string
+	FailureThreshold   int
+	BlacklistDuration  time.Duration
+	StartupHealthCheck string
+	MinAvailable       int
+	Metadata           map[string]MemberMeta
 }
 
 // MemberMeta carries optional descriptive information for monitoring UI.
@@ -51,7 +64,7 @@ type MemberMeta struct {
 	Mode          string
 	ListenAddress string
 	Port          uint16
-	Region        string // GeoIP region code: "jp", "kr", "us", "hk", "tw", "other"
+	Region        string // GeoIP region code: lowercase ISO country code (e.g. "jp", "us", "de"), fallback "other"
 	Country       string // Full country name from GeoIP
 }
 
@@ -139,6 +152,9 @@ func newPool(ctx context.Context, _ adapter.Router, logger singlog.ContextLogger
 				if probeFn := p.makeProbeByTagFunc(memberTag); probeFn != nil {
 					entry.SetProbe(probeFn)
 				}
+				if qualityFn := p.makeQualityByTagFunc(memberTag); qualityFn != nil {
+					entry.SetQualityProbe(qualityFn)
+				}
 			} else {
 				logger.Warn("failed to register node: ", memberTag)
 			}
@@ -185,7 +201,10 @@ func (p *poolOutbound) Start(stage adapter.StartStage) error {
 		return err
 	}
 	// 在初始化完成后，立即在后台触发健康检查
-	if p.monitor != nil {
+	if p.monitor != nil && config.ShouldRunStartupHealthCheck(
+		p.options.StartupHealthCheck,
+		p.options.MinAvailable,
+	) {
 		go p.probeAllMembersOnStartup()
 	}
 	return nil
@@ -235,6 +254,9 @@ func (p *poolOutbound) initializeMembersLocked() error {
 				entry.SetBlacklistFn(p.makeBlacklistByTagFunc(member.tag))
 				if probe := p.makeProbeFunc(member); probe != nil {
 					entry.SetProbe(probe)
+				}
+				if qualityFn := p.makeQualityFunc(member); qualityFn != nil {
+					entry.SetQualityProbe(qualityFn)
 				}
 			}
 		}
@@ -331,6 +353,7 @@ func (p *poolOutbound) probeAllMembersOnStartup() {
 				res.member.entry.RecordSuccessWithLatency(res.latency)
 				res.member.entry.MarkInitialCheckDone(true)
 			}
+			p.maybeProbeQuality(res.member)
 		}
 	}
 
@@ -486,9 +509,14 @@ func (p *poolOutbound) recordSuccess(member *memberState) {
 }
 
 func (p *poolOutbound) wrapConn(conn net.Conn, member *memberState) net.Conn {
+	var onWrite, onRead func(int64)
+	if member.shared != nil {
+		onWrite = func(n int64) { member.shared.addUpload(n) }
+		onRead = func(n int64) { member.shared.addDownload(n) }
+	}
 	return &trackedConn{Conn: conn, release: func() {
 		p.decActive(member)
-	}}
+	}, onWrite: onWrite, onRead: onRead}
 }
 
 func (p *poolOutbound) wrapPacketConn(conn net.PacketConn, member *memberState) net.PacketConn {
@@ -537,6 +565,544 @@ func httpProbe(conn net.Conn, host string) (time.Duration, error) {
 	return ttfb, nil
 }
 
+type ipAPIResponse struct {
+	Status      string `json:"status"`
+	Message     string `json:"message"`
+	Query       string `json:"query"`
+	Country     string `json:"country"`
+	CountryCode string `json:"countryCode"`
+	AS          string `json:"as"`
+	ASName      string `json:"asname"`
+	ISP         string `json:"isp"`
+	Org         string `json:"org"`
+	Mobile      bool   `json:"mobile"`
+	Hosting     bool   `json:"hosting"`
+	Proxy       bool   `json:"proxy"`
+}
+
+func (p *poolOutbound) maybeProbeQuality(member *memberState) {
+	if member == nil || member.entry == nil || member.outbound == nil || p.monitor == nil {
+		return
+	}
+	enabled, provider, apiKey, cacheTTL := p.monitor.QualityConfig()
+	if !enabled {
+		return
+	}
+	if !member.entry.BeginQualityProbe(cacheTTL, false) {
+		return
+	}
+	go func() {
+		select {
+		case qualityProbeSem <- struct{}{}:
+			defer func() { <-qualityProbeSem }()
+		case <-p.ctx.Done():
+			member.entry.FinishQualityProbe(monitor.QualityInfo{}, p.ctx.Err())
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(p.ctx, 15*time.Second)
+		defer cancel()
+
+		info, err := probeOutboundQuality(ctx, member.outbound, provider, apiKey)
+		member.entry.FinishQualityProbe(info, err)
+		if err != nil {
+			p.logger.Warn("quality probe failed for ", member.tag, ": ", err)
+			return
+		}
+		p.logger.Info("quality probe success for ", member.tag, ": ", info.ExitIP, " ", info.ProxyType, " ", info.ISP)
+	}()
+}
+
+func probeOutboundQuality(ctx context.Context, ob adapter.Outbound, provider, apiKey string) (monitor.QualityInfo, error) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" {
+		provider = "auto"
+	}
+	switch provider {
+	case "ipinfo_dkly", "ipinfo-dkly", "dkly":
+		return probeIPInfoDKLYQuality(ctx, ob, apiKey)
+	case "ip-api", "ipapi":
+		return probeIPAPIQuality(ctx, ob)
+	case "ipinfo", "ipinfo_lite", "ipinfo-lite":
+		return probeIPInfoLiteQuality(ctx, ob, apiKey)
+	case "auto":
+		if strings.TrimSpace(apiKey) != "" {
+			info, err := probeIPInfoDKLYQuality(ctx, ob, apiKey)
+			if err == nil {
+				return info, nil
+			}
+			info2, fallbackErr := probeIPAPIQuality(ctx, ob)
+			if fallbackErr == nil {
+				return info2, nil
+			}
+			info3, fallbackErr2 := probeIPInfoLiteQuality(ctx, ob, apiKey)
+			if fallbackErr2 == nil {
+				return info3, nil
+			}
+			return monitor.QualityInfo{}, fmt.Errorf("ipinfo_dkly: %v; ip-api: %v; ipinfo_lite: %v", err, fallbackErr, fallbackErr2)
+		}
+		return probeIPAPIQuality(ctx, ob)
+	default:
+		return probeIPInfoDKLYQuality(ctx, ob, apiKey)
+	}
+}
+
+func probeIPAPIQuality(ctx context.Context, ob adapter.Outbound) (monitor.QualityInfo, error) {
+	req := "GET /json/?fields=status,message,query,country,countryCode,as,asname,isp,org,mobile,hosting,proxy HTTP/1.1\r\n" +
+		"Host: " + qualityProbeHost + "\r\n" +
+		"Connection: close\r\n" +
+		"User-Agent: proxyweave/quality-probe\r\n\r\n"
+	body, status, err := doOutboundHTTPRequest(ctx, ob, qualityProbeHost, 80, false, req)
+	if err != nil {
+		return monitor.QualityInfo{}, err
+	}
+	if status < 200 || status >= 300 {
+		return monitor.QualityInfo{}, fmt.Errorf("quality api status: %d", status)
+	}
+
+	var api ipAPIResponse
+	if err := json.Unmarshal(body, &api); err != nil {
+		return monitor.QualityInfo{}, fmt.Errorf("decode quality response: %w", err)
+	}
+	if api.Status != "" && api.Status != "success" {
+		if api.Message == "" {
+			api.Message = api.Status
+		}
+		return monitor.QualityInfo{}, fmt.Errorf("quality api error: %s", api.Message)
+	}
+
+	asn := extractASN(api.AS)
+	ipValid, ipVersion, ipType, ipReason := validateExitIP(api.Query)
+	return monitor.QualityInfo{
+		ExitIP:          api.Query,
+		IPValid:         ipValid,
+		IPVersion:       ipVersion,
+		IPType:          ipType,
+		IPInvalidReason: ipReason,
+		CountryCode:     api.CountryCode,
+		Country:         api.Country,
+		ASN:             asn,
+		ASName:          api.ASName,
+		ISP:             api.ISP,
+		Org:             api.Org,
+		ProxyType:       classifyProxyType(api),
+		QualitySource:   qualityProbeHost,
+		Mobile:          api.Mobile,
+		Hosting:         api.Hosting,
+		Proxy:           api.Proxy,
+		CheckedAt:       time.Now(),
+	}, nil
+}
+
+type ipInfoLiteResponse struct {
+	IP          string `json:"ip"`
+	ASN         string `json:"asn"`
+	ASName      string `json:"as_name"`
+	ASDomain    string `json:"as_domain"`
+	CountryCode string `json:"country_code"`
+	Country     string `json:"country"`
+}
+
+type ipInfoDKLYResponse struct {
+	IP      string `json:"ip"`
+	Type    string `json:"type"`
+	Company struct {
+		Domain string `json:"domain"`
+		Name   string `json:"name"`
+		Type   string `json:"type"`
+	} `json:"company"`
+	Connection struct {
+		ASN          int    `json:"asn"`
+		Domain       string `json:"domain"`
+		Organization string `json:"organization"`
+		Route        string `json:"route"`
+		Type         string `json:"type"`
+	} `json:"connection"`
+	Location struct {
+		Country struct {
+			Code string `json:"code"`
+			Name string `json:"name"`
+		} `json:"country"`
+		Region struct {
+			Code string `json:"code"`
+			Name string `json:"name"`
+		} `json:"region"`
+		City string `json:"city"`
+	} `json:"location"`
+	Security struct {
+		IsAbuser        bool `json:"is_abuser"`
+		IsAttacker      bool `json:"is_attacker"`
+		IsBogon         bool `json:"is_bogon"`
+		IsCloudProvider bool `json:"is_cloud_provider"`
+		IsProxy         bool `json:"is_proxy"`
+		IsRelay         bool `json:"is_relay"`
+		IsTor           bool `json:"is_tor"`
+		IsTorExit       bool `json:"is_tor_exit"`
+		IsVPN           bool `json:"is_vpn"`
+		IsAnonymous     bool `json:"is_anonymous"`
+		IsThreat        bool `json:"is_threat"`
+	} `json:"security"`
+}
+
+func probeIPInfoLiteQuality(ctx context.Context, ob adapter.Outbound, apiKey string) (monitor.QualityInfo, error) {
+	exitIP, err := probeExitIP(ctx, ob)
+	if err != nil {
+		return monitor.QualityInfo{}, err
+	}
+	path := "/lite/" + url.PathEscape(exitIP)
+	if strings.TrimSpace(apiKey) != "" {
+		path += "?token=" + url.QueryEscape(strings.TrimSpace(apiKey))
+	}
+	req := "GET " + path + " HTTP/1.1\r\n" +
+		"Host: api.ipinfo.io\r\n" +
+		"Connection: close\r\n" +
+		"User-Agent: proxyweave/quality-probe\r\n\r\n"
+	body, status, err := doOutboundHTTPRequest(ctx, ob, "api.ipinfo.io", 443, true, req)
+	if err != nil {
+		return monitor.QualityInfo{}, err
+	}
+	if status < 200 || status >= 300 {
+		return monitor.QualityInfo{}, fmt.Errorf("ipinfo lite status: %d", status)
+	}
+	var api ipInfoLiteResponse
+	if err := json.Unmarshal(body, &api); err != nil {
+		return monitor.QualityInfo{}, fmt.Errorf("decode ipinfo lite response: %w", err)
+	}
+	if api.IP == "" {
+		api.IP = exitIP
+	}
+	text := strings.ToLower(strings.Join([]string{api.ASN, api.ASName, api.ASDomain}, " "))
+	ipValid, ipVersion, ipType, ipReason := validateExitIP(api.IP)
+	return monitor.QualityInfo{
+		ExitIP:          api.IP,
+		IPValid:         ipValid,
+		IPVersion:       ipVersion,
+		IPType:          ipType,
+		IPInvalidReason: ipReason,
+		CountryCode:     api.CountryCode,
+		Country:         api.Country,
+		ASN:             api.ASN,
+		ASName:          api.ASName,
+		ISP:             api.ASName,
+		Org:             api.ASDomain,
+		ProxyType:       classifyTextProxyType(text),
+		QualitySource:   "ipinfo_lite",
+		CheckedAt:       time.Now(),
+	}, nil
+}
+
+func probeIPInfoDKLYQuality(ctx context.Context, ob adapter.Outbound, apiKey string) (monitor.QualityInfo, error) {
+	if strings.TrimSpace(apiKey) == "" {
+		return monitor.QualityInfo{}, fmt.Errorf("ipinfo dkly api key is required")
+	}
+	exitIP, err := probeExitIP(ctx, ob)
+	if err != nil {
+		return monitor.QualityInfo{}, err
+	}
+	path := "/api/?key=" + url.QueryEscape(strings.TrimSpace(apiKey)) + "&ip=" + url.QueryEscape(exitIP)
+	req := "GET " + path + " HTTP/1.1\r\n" +
+		"Host: ipinfo.dkly.net\r\n" +
+		"Connection: close\r\n" +
+		"User-Agent: proxyweave/quality-probe\r\n\r\n"
+	body, status, err := doOutboundHTTPRequest(ctx, ob, "ipinfo.dkly.net", 443, true, req)
+	if err != nil {
+		return monitor.QualityInfo{}, err
+	}
+	if status < 200 || status >= 300 {
+		return monitor.QualityInfo{}, fmt.Errorf("ipinfo dkly status: %d", status)
+	}
+	var api ipInfoDKLYResponse
+	if err := json.Unmarshal(body, &api); err != nil {
+		return monitor.QualityInfo{}, fmt.Errorf("decode ipinfo dkly response: %w", err)
+	}
+	if strings.TrimSpace(api.IP) == "" {
+		api.IP = exitIP
+	}
+	ipValid, ipVersion, ipType, ipReason := validateExitIP(api.IP)
+	info := monitor.QualityInfo{
+		ExitIP:          api.IP,
+		IPValid:         ipValid,
+		IPVersion:       ipVersion,
+		IPType:          ipType,
+		IPInvalidReason: ipReason,
+		CountryCode:     strings.ToUpper(strings.TrimSpace(api.Location.Country.Code)),
+		Country:         strings.TrimSpace(api.Location.Country.Name),
+		ASN:             formatASN(api.Connection.ASN),
+		ASName:          firstNonEmpty(api.Connection.Organization, api.Company.Name),
+		ISP:             api.Company.Name,
+		Org:             firstNonEmpty(api.Company.Domain, api.Connection.Domain),
+		ProxyType:       classifyDKLYProxyType(api),
+		QualitySource:   "ipinfo_dkly",
+		Hosting:         api.Security.IsCloudProvider || strings.EqualFold(strings.TrimSpace(api.Connection.Type), "hosting"),
+		Proxy:           api.Security.IsProxy || api.Security.IsVPN || api.Security.IsTor || api.Security.IsRelay || api.Security.IsAnonymous,
+		CheckedAt:       time.Now(),
+	}
+	if api.Security.IsThreat || api.Security.IsAbuser || api.Security.IsAttacker || api.Security.IsBogon {
+		info.Error = "threat"
+	}
+	return info, nil
+}
+
+func probeExitIP(ctx context.Context, ob adapter.Outbound) (string, error) {
+	req := "GET / HTTP/1.1\r\nHost: api.ipify.org\r\nConnection: close\r\nUser-Agent: proxyweave/quality-probe\r\n\r\n"
+	body, status, err := doOutboundHTTPRequest(ctx, ob, "api.ipify.org", 443, true, req)
+	if err != nil {
+		return "", err
+	}
+	if status < 200 || status >= 300 {
+		return "", fmt.Errorf("ipify status: %d", status)
+	}
+	ip := strings.TrimSpace(string(body))
+	if ip == "" {
+		return "", fmt.Errorf("empty exit ip")
+	}
+	return ip, nil
+}
+
+func doOutboundHTTPRequest(ctx context.Context, ob adapter.Outbound, host string, port uint16, useTLS bool, req string) ([]byte, int, error) {
+	destination := M.ParseSocksaddrHostPort(host, port)
+	conn, err := ob.DialContext(ctx, N.NetworkTCP, destination)
+	if err != nil {
+		return nil, 0, fmt.Errorf("dial %s: %w", host, err)
+	}
+	defer conn.Close()
+
+	if useTLS {
+		tlsConn := tls.Client(conn, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12})
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			return nil, 0, fmt.Errorf("tls handshake %s: %w", host, err)
+		}
+		conn = tlsConn
+	}
+
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write([]byte(req)); err != nil {
+		return nil, 0, fmt.Errorf("write request %s: %w", host, err)
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read response %s: %w", host, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("read body %s: %w", host, err)
+	}
+	return body, resp.StatusCode, nil
+}
+
+func validateExitIP(raw string) (valid bool, version string, ipType string, reason string) {
+	ipText := strings.TrimSpace(raw)
+	if ipText == "" {
+		return false, "", "invalid", "empty ip"
+	}
+	addr, err := netip.ParseAddr(ipText)
+	if err != nil {
+		return false, "", "invalid", "invalid ip format"
+	}
+	if addr.Is4() {
+		version = "ipv4"
+	} else if addr.Is6() {
+		version = "ipv6"
+	} else {
+		version = "unknown"
+	}
+
+	switch {
+	case addr.IsUnspecified():
+		return false, version, "unspecified", "unspecified address"
+	case addr.IsLoopback():
+		return false, version, "loopback", "loopback address"
+	case addr.IsPrivate():
+		return false, version, "private", "private address"
+	case addr.IsLinkLocalUnicast():
+		return false, version, "link_local", "link-local address"
+	case addr.IsMulticast():
+		return false, version, "multicast", "multicast address"
+	case isSpecialUseIP(addr):
+		return false, version, "reserved", "reserved/special-use address"
+	case !addr.IsGlobalUnicast():
+		return false, version, "invalid", "not global unicast"
+	default:
+		return true, version, "public", ""
+	}
+}
+
+func isSpecialUseIP(addr netip.Addr) bool {
+	for _, cidr := range []string{
+		"0.0.0.0/8",       // current network
+		"100.64.0.0/10",   // carrier-grade NAT
+		"169.254.0.0/16",  // link local (kept for clarity)
+		"192.0.0.0/24",    // IETF protocol assignments
+		"192.0.2.0/24",    // documentation
+		"198.18.0.0/15",   // benchmark tests
+		"198.51.100.0/24", // documentation
+		"203.0.113.0/24",  // documentation
+		"224.0.0.0/4",     // multicast
+		"240.0.0.0/4",     // reserved
+		"::/128",          // unspecified
+		"::1/128",         // loopback
+		"64:ff9b::/96",    // IPv4/IPv6 translation
+		"100::/64",        // discard-only
+		"2001:db8::/32",   // documentation
+		"fc00::/7",        // unique local
+		"fe80::/10",       // link local
+		"ff00::/8",        // multicast
+	} {
+		prefix := netip.MustParsePrefix(cidr)
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+func extractASN(as string) string {
+	for _, part := range strings.Fields(as) {
+		upper := strings.ToUpper(strings.TrimSpace(part))
+		if strings.HasPrefix(upper, "AS") && len(upper) > 2 {
+			return upper
+		}
+	}
+	return as
+}
+
+func formatASN(asn int) string {
+	if asn <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("AS%d", asn)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func classifyProxyType(api ipAPIResponse) string {
+	if api.Mobile {
+		return "mobile"
+	}
+	text := strings.ToLower(strings.Join([]string{api.AS, api.ASName, api.ISP, api.Org}, " "))
+	if api.Hosting || api.Proxy || containsAny(text, []string{
+		"amazon", "aws", "google cloud", "microsoft", "azure", "cloudflare", "digitalocean",
+		"linode", "akamai", "ovh", "hetzner", "contabo", "vultr", "choopa", "leaseweb",
+		"alibaba", "aliyun", "tencent", "huawei cloud", "oracle", "rackspace", "colo", "datacenter",
+		"data center", "hosting", "server", "cloud", "vps", "dedicated",
+	}) {
+		return "datacenter"
+	}
+	if containsAny(text, []string{
+		"broadband", "fiber", "fibre", "cable", "telecom", "communications", "comcast", "verizon",
+		"at&t", "charter", "spectrum", "cox", "bt", "orange", "vodafone", "telefonica", "deutsche telekom",
+		"china telecom", "china unicom", "china mobile", "chinanet", "kddi", "ntt", "softbank", "sk broadband",
+		"korea telecom", "hinet", "singtel", "telstra", "pldt", "converge", "isp", "internet service",
+	}) || api.ISP != "" {
+		return "isp"
+	}
+	return "unknown"
+}
+
+func classifyTextProxyType(text string) string {
+	if containsAny(text, []string{
+		"amazon", "aws", "google cloud", "microsoft", "azure", "cloudflare", "digitalocean",
+		"linode", "akamai", "ovh", "hetzner", "contabo", "vultr", "choopa", "leaseweb",
+		"alibaba", "aliyun", "tencent", "huawei cloud", "oracle", "rackspace", "colo", "datacenter",
+		"data center", "hosting", "server", "cloud", "vps", "dedicated",
+	}) {
+		return "datacenter"
+	}
+	if containsAny(text, []string{
+		"broadband", "fiber", "fibre", "cable", "telecom", "communications", "comcast", "verizon",
+		"at&t", "charter", "spectrum", "cox", "bt", "orange", "vodafone", "telefonica", "deutsche telekom",
+		"china telecom", "china unicom", "china mobile", "chinanet", "kddi", "ntt", "softbank", "sk broadband",
+		"korea telecom", "hinet", "singtel", "telstra", "pldt", "converge", "isp", "internet service",
+	}) {
+		return "isp"
+	}
+	return "unknown"
+}
+
+func classifyDKLYProxyType(api ipInfoDKLYResponse) string {
+	switch {
+	case api.Security.IsProxy || api.Security.IsVPN || api.Security.IsTor || api.Security.IsRelay || api.Security.IsAnonymous:
+		return "proxy"
+	case api.Security.IsCloudProvider || strings.EqualFold(strings.TrimSpace(api.Connection.Type), "hosting"):
+		return "datacenter"
+	case strings.EqualFold(strings.TrimSpace(api.Company.Type), "isp"):
+		return "isp"
+	}
+	text := strings.ToLower(strings.Join([]string{
+		api.Company.Name,
+		api.Company.Domain,
+		api.Connection.Organization,
+		api.Connection.Domain,
+		api.Connection.Type,
+		api.Type,
+	}, " "))
+	return classifyTextProxyType(text)
+}
+
+func containsAny(s string, needles []string) bool {
+	for _, needle := range needles {
+		if strings.Contains(s, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *poolOutbound) makeQualityFunc(member *memberState) func(ctx context.Context) (monitor.QualityInfo, error) {
+	if p.monitor == nil || member == nil || member.outbound == nil {
+		return nil
+	}
+	return func(ctx context.Context) (monitor.QualityInfo, error) {
+		enabled, provider, apiKey, _ := p.monitor.QualityConfig()
+		if !enabled {
+			return monitor.QualityInfo{}, E.New("quality probe is disabled")
+		}
+		return probeOutboundQuality(ctx, member.outbound, provider, apiKey)
+	}
+}
+
+func (p *poolOutbound) makeQualityByTagFunc(tag string) func(ctx context.Context) (monitor.QualityInfo, error) {
+	if p.monitor == nil {
+		return nil
+	}
+	return func(ctx context.Context) (monitor.QualityInfo, error) {
+		p.mu.Lock()
+		if len(p.members) == 0 {
+			if err := p.initializeMembersLocked(); err != nil {
+				p.mu.Unlock()
+				return monitor.QualityInfo{}, err
+			}
+		}
+		var member *memberState
+		for _, m := range p.members {
+			if m.tag == tag {
+				member = m
+				break
+			}
+		}
+		p.mu.Unlock()
+		if member == nil {
+			return monitor.QualityInfo{}, E.New("member not found: ", tag)
+		}
+		qualityFn := p.makeQualityFunc(member)
+		if qualityFn == nil {
+			return monitor.QualityInfo{}, E.New("quality probe not available")
+		}
+		return qualityFn(ctx)
+	}
+}
+
 func (p *poolOutbound) makeProbeFunc(member *memberState) func(ctx context.Context) (time.Duration, error) {
 	if p.monitor == nil {
 		return nil
@@ -551,6 +1117,7 @@ func (p *poolOutbound) makeProbeFunc(member *memberState) func(ctx context.Conte
 		if err != nil {
 			if member.entry != nil {
 				member.entry.RecordFailure(err)
+				member.entry.MarkInitialCheckDone(false)
 			}
 			return 0, err
 		}
@@ -561,6 +1128,7 @@ func (p *poolOutbound) makeProbeFunc(member *memberState) func(ctx context.Conte
 		if err != nil {
 			if member.entry != nil {
 				member.entry.RecordFailure(err)
+				member.entry.MarkInitialCheckDone(false)
 			}
 			return 0, err
 		}
@@ -569,7 +1137,9 @@ func (p *poolOutbound) makeProbeFunc(member *memberState) func(ctx context.Conte
 		duration := time.Since(start)
 		if member.entry != nil {
 			member.entry.RecordSuccessWithLatency(duration)
+			member.entry.MarkInitialCheckDone(true)
 		}
+		p.maybeProbeQuality(member)
 		// Clear pool blacklist on successful probe — a node that passes
 		// health check should be available for selection immediately,
 		// not remain blacklisted for the full duration (fixes #8, #9).
@@ -618,6 +1188,7 @@ func (p *poolOutbound) makeProbeByTagFunc(tag string) func(ctx context.Context) 
 		if err != nil {
 			if member.entry != nil {
 				member.entry.RecordFailure(err)
+				member.entry.MarkInitialCheckDone(false)
 			}
 			return 0, err
 		}
@@ -628,6 +1199,7 @@ func (p *poolOutbound) makeProbeByTagFunc(tag string) func(ctx context.Context) 
 		if err != nil {
 			if member.entry != nil {
 				member.entry.RecordFailure(err)
+				member.entry.MarkInitialCheckDone(false)
 			}
 			return 0, err
 		}
@@ -636,7 +1208,9 @@ func (p *poolOutbound) makeProbeByTagFunc(tag string) func(ctx context.Context) 
 		duration := time.Since(start)
 		if member.entry != nil {
 			member.entry.RecordSuccessWithLatency(duration)
+			member.entry.MarkInitialCheckDone(true)
 		}
+		p.maybeProbeQuality(member)
 		// Clear pool blacklist on successful probe (fixes #8, #9)
 		if member.shared != nil {
 			member.shared.forceRelease()
@@ -663,6 +1237,24 @@ type trackedConn struct {
 	net.Conn
 	once    sync.Once
 	release func()
+	onWrite func(n int64)
+	onRead  func(n int64)
+}
+
+func (c *trackedConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	if n > 0 && c.onWrite != nil {
+		c.onWrite(int64(n))
+	}
+	return n, err
+}
+
+func (c *trackedConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 && c.onRead != nil {
+		c.onRead(int64(n))
+	}
+	return n, err
 }
 
 func (c *trackedConn) Close() error {
