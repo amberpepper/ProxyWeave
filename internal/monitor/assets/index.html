@@ -1183,7 +1183,6 @@
           <div class="panel-header">
             <div>
               <div class="panel-title">地域连通率 (Region Availability)</div>
-              <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">上方卡片看国家分布，下方表格看精确数据</div>
             </div>
           </div>
           <div style="padding:16px;">
@@ -1877,6 +1876,8 @@
     let subscriptionNodesPageSize = 20;
     let nodeInputMode = 'single';
     let _savedCoreSnapshot = '';
+    let connectionsSource = null;
+    let connectionsReconnectTimer = null;
 
     function showFullscreenLoading(text, subtext) {
       document.getElementById('fullscreenLoadingText').textContent = text || '处理中...';
@@ -1967,7 +1968,13 @@
       const err = document.getElementById('loginError');
       try {
         const res = await fetch('/api/auth', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({password:pwd})});
-        if (res.ok) { hideLoginOverlay(); refresh(); }
+        if (res.ok) {
+          hideLoginOverlay();
+          refresh();
+          connectNodesSSE();
+          connectConnectionsSSE();
+          fetchSubscriptionStatus();
+        }
         else { err.textContent = 'Auth Failed'; err.style.display = 'block'; }
       } catch (ex) { err.textContent = ex.message; err.style.display = 'block'; }
     }
@@ -2048,22 +2055,8 @@
       return escapeHtml(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
-    let autoRefreshTimer = null;
-    const AUTO_REFRESH_INTERVAL_MS = 5000;
-
-    function startAutoRefresh() {
-      if (autoRefreshTimer) return;
-      autoRefreshTimer = setInterval(() => {
-        if (document.hidden) return;
-        refresh();
-      }, AUTO_REFRESH_INTERVAL_MS);
-    }
-
-    function stopAutoRefresh() {
-      if (!autoRefreshTimer) return;
-      clearInterval(autoRefreshTimer);
-      autoRefreshTimer = null;
-    }
+    let nodesSource = null;
+    let nodesReconnectTimer = null;
 
     async function refresh() {
       try {
@@ -2073,22 +2066,66 @@
           page_size: String(monitorNodesPageSize)
         });
         const res = await fetch('/api/nodes?' + qs.toString());
-        if (res.status === 401) { showLoginOverlay(); stopAutoRefresh(); return; }
+        if (res.status === 401) {
+          showLoginOverlay();
+          disconnectNodesSSE();
+          disconnectConnectionsSSE();
+          stopLogPolling();
+          return;
+        }
         const data = await res.json();
-        monitorNodesCache = data.nodes || [];
-        monitorNodesPage = data.page || 1;
-        monitorNodesPageSize = data.page_size || monitorNodesPageSize;
-        monitorNodesTotalPages = data.total_pages || 1;
-        monitorNodesFilteredTotal = data.filtered_total || 0;
-        dashboardFastestNodes = data.fastest_nodes || [];
-        dashboardRegionStats = data.region_stats || {};
-        dashboardRegionHealthy = data.region_healthy || {};
-        dashboardLatencyHistogram = data.latency_histogram || [];
-        updateDashboardStats(data);
-        fetchConnectionStatus(data.active_connections || 0);
-        renderNodes(monitorNodesCache);
-        fetchSubscriptionStatus();
+        applyNodesPayload(data);
       } catch(e) {}
+    }
+
+    function applyNodesPayload(data) {
+      monitorNodesCache = data.nodes || [];
+      monitorNodesPage = data.page || 1;
+      monitorNodesPageSize = data.page_size || monitorNodesPageSize;
+      monitorNodesTotalPages = data.total_pages || 1;
+      monitorNodesFilteredTotal = data.filtered_total || 0;
+      dashboardFastestNodes = data.fastest_nodes || [];
+      dashboardRegionStats = data.region_stats || {};
+      dashboardRegionHealthy = data.region_healthy || {};
+      dashboardLatencyHistogram = data.latency_histogram || [];
+      updateDashboardStats(data);
+      renderNodes(monitorNodesCache);
+    }
+
+    function disconnectNodesSSE() {
+      if (nodesReconnectTimer) { clearTimeout(nodesReconnectTimer); nodesReconnectTimer = null; }
+      if (nodesSource) {
+        nodesSource.close();
+        nodesSource = null;
+      }
+    }
+
+    function connectNodesSSE() {
+      disconnectNodesSSE();
+      monitorNodesPageSize = parseInt(document.getElementById('monitorNodePageSize')?.value || monitorNodesPageSize || 20) || 20;
+      const qs = new URLSearchParams({
+        page: String(monitorNodesPage),
+        page_size: String(monitorNodesPageSize),
+      });
+      nodesSource = new EventSource('/api/nodes/stream?' + qs.toString());
+      nodesSource.addEventListener('nodes', (ev) => {
+        try {
+          const data = JSON.parse(ev.data || '{}');
+          applyNodesPayload(data);
+        } catch (e) {}
+      });
+      nodesSource.onerror = () => {
+        if (nodesSource) {
+          nodesSource.close();
+          nodesSource = null;
+        }
+        if (!nodesReconnectTimer) {
+          nodesReconnectTimer = setTimeout(() => {
+            nodesReconnectTimer = null;
+            connectNodesSSE();
+          }, 2000);
+        }
+      };
     }
 
     function updateDashboardStats(data) {
@@ -2100,6 +2137,7 @@
       document.getElementById('healthRate').textContent = healthRate.toFixed(1) + '%';
       document.getElementById('healthSummary').textContent = `健康 ${healthy.toLocaleString()} / 总计 ${total.toLocaleString()}`;
       document.getElementById('activeConnections').textContent = data.active_connections || 0;
+      document.getElementById('connectionBreakdown').textContent = `入站 ${Number(data.active_connections || 0).toLocaleString()} · 出站 -`;
       document.getElementById('uniqueExitIPs').textContent = (data.unique_exit_ips || 0).toLocaleString();
       document.getElementById('blacklistedNodes').textContent = (data.blacklisted_nodes || 0).toLocaleString();
       pushPoolTrend(total, healthy);
@@ -2123,15 +2161,50 @@
       if (poolTrendTime.length > 60) { poolTrendTime.shift(); poolTrendTotal.shift(); poolTrendHealthy.shift(); }
     }
 
+    function applyConnectionPayload(d, fallbackActive = 0) {
+      const active = Number(d.active ?? fallbackActive ?? 0);
+      document.getElementById('activeConnections').textContent = active.toLocaleString();
+      document.getElementById('connectionBreakdown').textContent = `入站 ${Number(d.inbound || active).toLocaleString()} · 出站 ${Number(d.outbound_routes || 0).toLocaleString()}`;
+    }
+
+    function disconnectConnectionsSSE() {
+      if (connectionsReconnectTimer) { clearTimeout(connectionsReconnectTimer); connectionsReconnectTimer = null; }
+      if (connectionsSource) {
+        connectionsSource.close();
+        connectionsSource = null;
+      }
+    }
+
+    function connectConnectionsSSE() {
+      disconnectConnectionsSSE();
+      connectionsSource = new EventSource('/api/connections/stream');
+      connectionsSource.addEventListener('connections', (ev) => {
+        try {
+          const d = JSON.parse(ev.data || '{}');
+          applyConnectionPayload(d, 0);
+        } catch (e) {}
+      });
+      connectionsSource.onerror = () => {
+        if (connectionsSource) {
+          connectionsSource.close();
+          connectionsSource = null;
+        }
+        if (!connectionsReconnectTimer) {
+          connectionsReconnectTimer = setTimeout(() => {
+            connectionsReconnectTimer = null;
+            connectConnectionsSSE();
+          }, 2000);
+        }
+      };
+    }
+
     async function fetchConnectionStatus(fallbackActive = 0) {
       try {
         const res = await fetch('/api/connections/status');
         if (!res.ok) throw new Error('status ' + res.status);
         const d = await res.json();
         if (d.error) throw new Error(d.error);
-        const active = Number(d.active ?? fallbackActive ?? 0);
-        document.getElementById('activeConnections').textContent = active.toLocaleString();
-        document.getElementById('connectionBreakdown').textContent = `入站 ${Number(d.inbound || active).toLocaleString()} · 出站 ${Number(d.outbound_routes || 0).toLocaleString()}`;
+        applyConnectionPayload(d, fallbackActive);
       } catch (e) {
         document.getElementById('connectionBreakdown').textContent = `入站 ${Number(fallbackActive || 0).toLocaleString()} · 出站 -`;
       }
@@ -2212,6 +2285,7 @@
           const rate = total > 0 ? (healthy / total) * 100 : 0;
           return { code: k, total, healthy, unavailable, rate };
         })
+        .filter(item => Number(item.healthy || 0) > 0)
         .sort((a, b) => b.total - a.total || b.rate - a.rate || a.code.localeCompare(b.code));
       dashboardRegionEntries = regionEntries;
       renderRegionDetails();
@@ -2460,7 +2534,7 @@
       const nextPage = monitorNodesPage + delta;
       if (nextPage < 1 || nextPage > Math.max(monitorNodesTotalPages, 1)) return;
       monitorNodesPage = nextPage;
-      refresh();
+      connectNodesSSE();
     }
 
     // Probe All
@@ -3706,29 +3780,52 @@ curl "${withAPIKey('/api/export?scheme=all')}"`);
       refresh();
     }
 
-    let logPollInterval = null;
+    let logsSource = null;
+    let logsReconnectTimer = null;
     function startLogPolling() {
-      pollLogs();
-      if (!logPollInterval) logPollInterval = setInterval(pollLogs, 2000);
+      stopLogPolling();
+      logsSource = new EventSource('/api/logs/stream');
+      logsSource.addEventListener('logs', (ev) => {
+        try {
+          const d = JSON.parse(ev.data || '{}');
+          applyLogContent(d.logs || '');
+        } catch (e) {}
+      });
+      logsSource.onerror = () => {
+        if (logsSource) {
+          logsSource.close();
+          logsSource = null;
+        }
+        if (!logsReconnectTimer) {
+          logsReconnectTimer = setTimeout(() => {
+            logsReconnectTimer = null;
+            const logsTab = document.getElementById('logsTab');
+            if (logsTab && logsTab.classList.contains('active')) startLogPolling();
+          }, 2000);
+        }
+      };
     }
     function stopLogPolling() {
-      if (logPollInterval) { clearInterval(logPollInterval); logPollInterval = null; }
+      if (logsReconnectTimer) { clearTimeout(logsReconnectTimer); logsReconnectTimer = null; }
+      if (logsSource) { logsSource.close(); logsSource = null; }
+    }
+    function applyLogContent(content) {
+      const ta = document.getElementById('consoleLogs');
+      if (!ta) return;
+      const autoScroll = document.getElementById('autoScrollLogs').checked;
+      const prevTop = ta.scrollTop;
+      ta.value = content || '';
+      if (autoScroll) {
+        ta.scrollTop = ta.scrollHeight;
+      } else {
+        ta.scrollTop = prevTop;
+      }
     }
     async function pollLogs() {
       try {
         const r = await fetch('/api/logs');
         const d = await r.json();
-        if (d.logs) {
-          const ta = document.getElementById('consoleLogs');
-          const autoScroll = document.getElementById('autoScrollLogs').checked;
-          const prevTop = ta.scrollTop;
-          ta.value = d.logs;
-          if (autoScroll) {
-             ta.scrollTop = ta.scrollHeight;
-          } else {
-             ta.scrollTop = prevTop;
-          }
-        }
+        applyLogContent(d.logs || '');
       } catch(e){}
     }
 
@@ -3829,7 +3926,7 @@ curl "${withAPIKey('/api/export?scheme=all')}"`);
     });
     document.getElementById('monitorNodePageSize')?.addEventListener('change', () => {
       monitorNodesPage = 1;
-      refresh();
+      connectNodesSSE();
     });
     document.getElementById('configNodeSourceFilter')?.addEventListener('change', () => loadConfigNodes(1));
     document.getElementById('configNodeStatusFilter')?.addEventListener('change', () => loadConfigNodes(1));
@@ -3843,7 +3940,14 @@ curl "${withAPIKey('/api/export?scheme=all')}"`);
     });
 
     // Init App
-    checkAuth().then(ok => { if(ok) { refresh(); startAutoRefresh(); } });
+    checkAuth().then(ok => {
+      if(ok) {
+        refresh();
+        connectNodesSSE();
+        connectConnectionsSSE();
+        fetchSubscriptionStatus();
+      }
+    });
 
     // Fetch GitHub stars
     fetch('https://api.github.com/repos/amberpepper/ProxyWeave')

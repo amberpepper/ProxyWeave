@@ -140,6 +140,7 @@ func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
 	mux.HandleFunc("/api/auth", s.handleAuth)
 	mux.HandleFunc("/api/settings", s.withAuth(s.handleSettings))
 	mux.HandleFunc("/api/nodes", s.withAuth(s.handleNodes))
+	mux.HandleFunc("/api/nodes/stream", s.withAuth(s.handleNodesStream))
 	mux.HandleFunc("/api/nodes/config", s.withAuth(s.handleConfigNodes))
 	mux.HandleFunc("/api/nodes/config/", s.withAuth(s.handleConfigNodeItem))
 	mux.HandleFunc("/api/nodes/test", s.withAuth(s.handleNodeTest))
@@ -157,7 +158,9 @@ func NewServer(cfg Config, mgr *Manager, logger *log.Logger) *Server {
 	mux.HandleFunc("/api/reload", s.withAuth(s.handleReload))
 	mux.HandleFunc("/api/traffic", s.withAuth(s.handleTraffic))
 	mux.HandleFunc("/api/connections/status", s.withAuth(s.handleConnectionStatus))
+	mux.HandleFunc("/api/connections/stream", s.withAuth(s.handleConnectionStatusStream))
 	mux.HandleFunc("/api/logs", s.withAuth(s.handleLogs))
+	mux.HandleFunc("/api/logs/stream", s.withAuth(s.handleLogsStream))
 	s.srv = &http.Server{Addr: cfg.Listen, Handler: mux}
 	return s
 }
@@ -341,19 +344,84 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	writeJSON(w, s.buildNodesPayload(r.URL.Query()))
+}
 
+func (s *Server) handleNodesStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	send := func() error {
+		payload := s.buildNodesPayload(r.URL.Query())
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "event: nodes\ndata: %s\n\n", b); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+
+	if err := send(); err != nil {
+		return
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			if err := send(); err != nil {
+				return
+			}
+		case <-heartbeat.C:
+			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
+func healthRate(total, healthy int) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return float64(healthy) * 100 / float64(total)
+}
+
+func (s *Server) buildNodesPayload(q url.Values) map[string]any {
 	page := 1
-	if v, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page"))); err == nil && v > 0 {
+	if v, err := strconv.Atoi(strings.TrimSpace(q.Get("page"))); err == nil && v > 0 {
 		page = v
 	}
 	pageSize := 20
-	if v, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("page_size"))); err == nil && v > 0 {
+	if v, err := strconv.Atoi(strings.TrimSpace(q.Get("page_size"))); err == nil && v > 0 {
 		if v > 200 {
 			v = 200
 		}
 		pageSize = v
 	}
-	regionFilter := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("region")))
+	regionFilter := strings.TrimSpace(strings.ToLower(q.Get("region")))
 	if regionFilter == "" {
 		regionFilter = "all"
 	}
@@ -471,7 +539,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		fastestCandidates = fastestCandidates[:10]
 	}
 
-	payload := map[string]any{
+	return map[string]any{
 		"nodes":              pageNodes,
 		"total_nodes":        totalNodes,
 		"filtered_total":     filteredTotal,
@@ -489,14 +557,6 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		"region_healthy":     regionHealthy,
 		"fastest_nodes":      fastestCandidates,
 	}
-	writeJSON(w, payload)
-}
-
-func healthRate(total, healthy int) float64 {
-	if total <= 0 {
-		return 0
-	}
-	return float64(healthy) * 100 / float64(total)
 }
 
 func (s *Server) handleDebug(w http.ResponseWriter, r *http.Request) {
@@ -2569,26 +2629,83 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	writeJSON(w, s.getConnectionStatusPayload())
+}
+
+func (s *Server) handleConnectionStatusStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	send := func() error {
+		payload := s.getConnectionStatusPayload()
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "event: connections\ndata: %s\n\n", b); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+
+	if err := send(); err != nil {
+		return
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			if err := send(); err != nil {
+				return
+			}
+		case <-heartbeat.C:
+			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
+func (s *Server) getConnectionStatusPayload() map[string]any {
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get("http://127.0.0.1:9092/connections")
 	if err != nil {
-		writeJSON(w, map[string]any{
+		return map[string]any{
 			"active":          0,
 			"inbound":         0,
 			"outbound_routes": 0,
 			"error":           err.Error(),
-		})
-		return
+		}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		writeJSON(w, map[string]any{
+		return map[string]any{
 			"active":          0,
 			"inbound":         0,
 			"outbound_routes": 0,
 			"error":           fmt.Sprintf("clash api status: %d", resp.StatusCode),
-		})
-		return
+		}
 	}
 	var payload struct {
 		DownloadTotal int64 `json:"downloadTotal"`
@@ -2604,13 +2721,12 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 		Memory uint64 `json:"memory"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		writeJSON(w, map[string]any{
+		return map[string]any{
 			"active":          0,
 			"inbound":         0,
 			"outbound_routes": 0,
 			"error":           err.Error(),
-		})
-		return
+		}
 	}
 	routes := make(map[string]struct{})
 	for _, conn := range payload.Connections {
@@ -2622,14 +2738,14 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 	}
-	writeJSON(w, map[string]any{
+	return map[string]any{
 		"active":          len(payload.Connections),
 		"inbound":         len(payload.Connections),
 		"outbound_routes": len(routes),
 		"upload_total":    payload.UploadTotal,
 		"download_total":  payload.DownloadTotal,
 		"memory":          payload.Memory,
-	})
+	}
 }
 
 // handleTraffic streams real-time traffic from sing-box Clash API as SSE.
@@ -2686,6 +2802,65 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	content := SharedLogBuffer.Content()
 	writeJSON(w, map[string]any{"logs": content})
+}
+
+func (s *Server) handleLogsStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	sendLogs := func() error {
+		content, _ := SharedLogBuffer.Snapshot()
+		b, err := json.Marshal(map[string]any{"logs": content})
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "event: logs\ndata: %s\n\n", b); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+
+	updates, _, cancel := SharedLogBuffer.Subscribe()
+	defer cancel()
+
+	if err := sendLogs(); err != nil {
+		return
+	}
+
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case _, ok := <-updates:
+			if !ok {
+				return
+			}
+			if err := sendLogs(); err != nil {
+				return
+			}
+		case <-heartbeat.C:
+			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
 }
 
 // Session management functions
