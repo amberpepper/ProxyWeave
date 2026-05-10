@@ -2229,8 +2229,9 @@
       const cards = document.getElementById('regionCardsGrid');
       const tbody = document.getElementById('regionDetailsTableBody');
       if (!cards || !tbody) return;
+      const visibleEntries = (dashboardRegionEntries || []).filter(item => Number(item?.healthy || 0) > 0);
 
-      cards.innerHTML = dashboardRegionEntries.map(item => {
+      cards.innerHTML = visibleEntries.map(item => {
         const rate = Number(item.rate || 0).toFixed(1);
         return `
           <div class="region-card">
@@ -2249,7 +2250,7 @@
         `;
       }).join('');
 
-      tbody.innerHTML = dashboardRegionEntries.map(item => {
+      tbody.innerHTML = visibleEntries.map(item => {
         const rate = Number(item.rate || 0).toFixed(1);
         return `
           <tr>
