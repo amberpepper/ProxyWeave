@@ -3951,11 +3951,6 @@ curl "${withAPIKey('/api/export?scheme=all')}"`);
       }
     });
 
-    // Fetch GitHub stars
-    fetch('https://api.github.com/repos/amberpepper/ProxyWeave')
-      .then(r => r.json())
-      .then(d => { if(d.stargazers_count !== undefined) document.getElementById('githubStars').textContent = d.stargazers_count; })
-      .catch(() => {});
   </script>
 </body>
 </html>
