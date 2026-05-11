@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	neturl "net/url"
 	"runtime"
 	"sort"
 	"strconv"
@@ -174,6 +175,8 @@ type Manager struct {
 	cfg                Config
 	probeDst           M.Socksaddr
 	probeReady         bool
+	probePath          string
+	probeTLS           bool
 	mu                 sync.RWMutex
 	nodes              map[string]*entry
 	ctx                context.Context
@@ -199,27 +202,37 @@ func NewManager(cfg Config) (*Manager, error) {
 		ctx:       ctx,
 		cancel:    cancel,
 		persisted: make(map[string]PersistedState),
+		probePath: "/generate_204",
 	}
 	if cfg.ProbeTarget != "" {
-		target := cfg.ProbeTarget
-		// Strip URL scheme if present (e.g., "https://www.google.com:443" -> "www.google.com:443")
-		if strings.HasPrefix(target, "https://") {
-			target = strings.TrimPrefix(target, "https://")
-		} else if strings.HasPrefix(target, "http://") {
-			target = strings.TrimPrefix(target, "http://")
+		targetRaw := strings.TrimSpace(cfg.ProbeTarget)
+		parseRaw := targetRaw
+		if !strings.Contains(parseRaw, "://") {
+			parseRaw = "http://" + parseRaw
 		}
-		// Remove trailing path if present
-		if idx := strings.Index(target, "/"); idx != -1 {
-			target = target[:idx]
-		}
-		host, port, err := net.SplitHostPort(target)
+		u, err := neturl.Parse(parseRaw)
 		if err != nil {
-			// If no port specified, use default based on original scheme
-			if strings.HasPrefix(cfg.ProbeTarget, "https://") {
-				host = target
+			u = &neturl.URL{Scheme: "http", Host: targetRaw}
+		}
+
+		m.probeTLS = strings.EqualFold(strings.TrimSpace(u.Scheme), "https")
+		if p := strings.TrimSpace(u.EscapedPath()); p != "" {
+			m.probePath = p
+		}
+		if u.RawQuery != "" {
+			m.probePath += "?" + u.RawQuery
+		}
+		if !strings.HasPrefix(m.probePath, "/") {
+			m.probePath = "/" + m.probePath
+		}
+
+		targetHost := strings.TrimSpace(u.Host)
+		host, port, err := net.SplitHostPort(targetHost)
+		if err != nil {
+			host = targetHost
+			if m.probeTLS {
 				port = "443"
 			} else {
-				host = target
 				port = "80"
 			}
 		}
@@ -490,6 +503,21 @@ func (m *Manager) DestinationForProbe() (M.Socksaddr, bool) {
 		return M.Socksaddr{}, false
 	}
 	return m.probeDst, true
+}
+
+// ProbeRequestOptions returns probe request path and whether TLS should be used.
+func (m *Manager) ProbeRequestOptions() (path string, useTLS bool) {
+	if m == nil {
+		return "/generate_204", false
+	}
+	path = strings.TrimSpace(m.probePath)
+	if path == "" {
+		path = "/generate_204"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return path, m.probeTLS
 }
 
 // Snapshot returns a sorted copy of current node states.

@@ -1775,7 +1775,18 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 				s.cfgSrc.MultiPort.Password = req.MultiPort.Password
 			}
 			if req.Pool != nil {
-				s.cfgSrc.Pool.Mode = req.Pool.Mode
+				mode := strings.ToLower(strings.TrimSpace(req.Pool.Mode))
+				switch mode {
+				case "random", "sequential", "balance":
+					s.cfgSrc.Pool.Mode = mode
+				case "latency":
+					// 已废弃：保存时自动回退到 random。
+					s.cfgSrc.Pool.Mode = "random"
+				case "":
+					// keep current
+				default:
+					s.cfgSrc.Pool.Mode = "sequential"
+				}
 				s.cfgSrc.Pool.FailureThreshold = req.Pool.FailureThreshold
 				if req.Pool.BlacklistDuration != "" {
 					if d, err := time.ParseDuration(req.Pool.BlacklistDuration); err == nil {

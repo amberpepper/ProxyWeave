@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,7 +41,6 @@ const (
 	modeSequential = "sequential"
 	modeRandom     = "random"
 	modeBalance    = "balance"
-	modeLatency    = "latency"
 
 	qualityProbeHost = "ip-api.com"
 )
@@ -185,8 +185,9 @@ func normalizeOptions(options Options) Options {
 		options.Mode = modeRandom
 	case modeBalance:
 		options.Mode = modeBalance
-	case modeLatency:
-		options.Mode = modeLatency
+	case "latency":
+		// 已废弃：自动回退到随机，避免继续命中坏节点。
+		options.Mode = modeRandom
 	default:
 		options.Mode = modeSequential
 	}
@@ -293,6 +294,7 @@ func (p *poolOutbound) probeAllMembersOnStartup() {
 	members := make([]*memberState, len(p.members))
 	copy(members, p.members)
 	p.mu.Unlock()
+	probePath, probeTLS := p.monitor.ProbeRequestOptions()
 
 	// Concurrent probing with bounded workers
 	const maxWorkers = 20
@@ -321,7 +323,7 @@ func (p *poolOutbound) probeAllMembersOnStartup() {
 				return
 			}
 
-			_, err = httpProbe(conn, destination.AddrString())
+			_, err = httpProbe(conn, destination.AddrString(), probePath, probeTLS)
 			conn.Close()
 			if err != nil {
 				results <- probeResult{member: m, err: err}
@@ -472,8 +474,6 @@ func (p *poolOutbound) selectMember(candidates []*memberState) *memberState {
 		return candidates[idx]
 	case modeBalance:
 		return selectLeastActive(candidates)
-	case modeLatency:
-		return selectLowestLatency(candidates)
 	default:
 		idx := int(p.rrCounter.Add(1)-1) % len(candidates)
 		return candidates[idx]
@@ -582,35 +582,66 @@ func (p *poolOutbound) makeReleaseFunc(member *memberState) func() {
 	}
 }
 
-// httpProbe performs an HTTP probe through the connection and measures TTFB.
-// It sends a minimal HTTP request and waits for the first byte of response.
-func httpProbe(conn net.Conn, host string) (time.Duration, error) {
-	// Build HTTP request
-	req := fmt.Sprintf("GET /generate_204 HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nUser-Agent: Mozilla/5.0\r\n\r\n", host)
+// httpProbe performs an HTTP(S) probe and measures TTFB.
+// It validates the response status line to avoid false-positive "success".
+func httpProbe(conn net.Conn, host, path string, useTLS bool) (time.Duration, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		path = "/generate_204"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
 
-	// Try to set write deadline (ignore errors for connections that don't support it)
-	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	hostHeader := host
+	serverName := host
+	if h, _, err := net.SplitHostPort(host); err == nil && strings.TrimSpace(h) != "" {
+		serverName = h
+	}
 
-	// Record time just before sending request
+	// For HTTPS probe targets, establish TLS over the already-proxied TCP stream.
+	stream := conn
+	if useTLS {
+		tlsConn := tls.Client(conn, &tls.Config{
+			ServerName:         serverName,
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: true, // health check should focus on connectivity, not certificate trust
+		})
+		_ = tlsConn.SetDeadline(time.Now().Add(10 * time.Second))
+		if err := tlsConn.Handshake(); err != nil {
+			return 0, fmt.Errorf("tls handshake: %w", err)
+		}
+		stream = tlsConn
+	}
+
+	req := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nUser-Agent: ProxyWeave-HealthCheck/1.0\r\nAccept: */*\r\n\r\n", path, hostHeader)
+
+	_ = stream.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	start := time.Now()
-
-	// Send HTTP request
-	if _, err := conn.Write([]byte(req)); err != nil {
+	if _, err := stream.Write([]byte(req)); err != nil {
 		return 0, fmt.Errorf("write request: %w", err)
 	}
 
-	// Try to set read deadline (ignore errors for connections that don't support it)
-	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-
-	// Read first byte (TTFB - Time To First Byte)
-	reader := bufio.NewReader(conn)
-	_, err := reader.ReadByte()
+	_ = stream.SetReadDeadline(time.Now().Add(10 * time.Second))
+	reader := bufio.NewReader(stream)
+	statusLine, err := reader.ReadString('\n')
 	if err != nil {
 		return 0, fmt.Errorf("read response: %w", err)
 	}
-
-	// Calculate TTFB
 	ttfb := time.Since(start)
+
+	parts := strings.Fields(strings.TrimSpace(statusLine))
+	if len(parts) < 2 {
+		return 0, fmt.Errorf("invalid response status line: %q", strings.TrimSpace(statusLine))
+	}
+	code, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, fmt.Errorf("invalid status code in response line: %q", strings.TrimSpace(statusLine))
+	}
+	// Accept 2xx/3xx as healthy.
+	if code < 200 || code >= 400 {
+		return 0, fmt.Errorf("probe target returned status %d", code)
+	}
 	return ttfb, nil
 }
 
@@ -1160,6 +1191,7 @@ func (p *poolOutbound) makeProbeFunc(member *memberState) func(ctx context.Conte
 	if !ok {
 		return nil
 	}
+	probePath, probeTLS := p.monitor.ProbeRequestOptions()
 	return func(ctx context.Context) (time.Duration, error) {
 		start := time.Now()
 		conn, err := member.outbound.DialContext(ctx, N.NetworkTCP, destination)
@@ -1173,7 +1205,7 @@ func (p *poolOutbound) makeProbeFunc(member *memberState) func(ctx context.Conte
 		defer conn.Close()
 
 		// Perform HTTP probe to measure actual latency (TTFB)
-		_, err = httpProbe(conn, destination.AddrString())
+		_, err = httpProbe(conn, destination.AddrString(), probePath, probeTLS)
 		if err != nil {
 			if member.entry != nil {
 				member.entry.RecordFailure(err)
@@ -1208,6 +1240,7 @@ func (p *poolOutbound) makeProbeByTagFunc(tag string) func(ctx context.Context) 
 	if !ok {
 		return nil
 	}
+	probePath, probeTLS := p.monitor.ProbeRequestOptions()
 	return func(ctx context.Context) (time.Duration, error) {
 		// Ensure members are initialized
 		p.mu.Lock()
@@ -1244,7 +1277,7 @@ func (p *poolOutbound) makeProbeByTagFunc(tag string) func(ctx context.Context) 
 		defer conn.Close()
 
 		// Perform HTTP probe to measure actual latency (TTFB)
-		_, err = httpProbe(conn, destination.AddrString())
+		_, err = httpProbe(conn, destination.AddrString(), probePath, probeTLS)
 		if err != nil {
 			if member.entry != nil {
 				member.entry.RecordFailure(err)
