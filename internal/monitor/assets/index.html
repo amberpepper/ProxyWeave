@@ -2568,13 +2568,14 @@
                  if(d.type === 'start') { total = d.total; document.getElementById('probeStats').textContent = `0/${total}`; }
                  else if(d.type === 'progress') {
                    current = d.current;
-                   if(d.error) fail++; else suc++;
+                   if(d.status === 'success') suc++; else fail++;
                    document.getElementById('probeProgressFill').style.width = `${d.progress}%`;
                    document.getElementById('probeStats').textContent = `${current}/${total}`;
                    document.getElementById('probeSuccess').textContent = suc;
                    document.getElementById('probeFail').textContent = fail;
                  } else if (d.type === 'complete') {
-                   showToast(`${doneLabel}: 成功${d.success}, 失败${d.failed}`);
+                   const cancelled = Number(d.cancelled || 0);
+                   showToast(`${doneLabel}: 成功${d.success}, 失败${d.failed}${cancelled > 0 ? `（取消${cancelled}）` : ''}`);
                  }
                } catch(e){}
             }

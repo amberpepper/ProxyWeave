@@ -923,64 +923,92 @@ func (s *Server) streamProbeSnapshots(w http.ResponseWriter, r *http.Request, sn
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
-	defer cancel()
+	ctx := r.Context()
 	type probeResult struct {
 		tag     string
 		name    string
 		latency int64
 		err     string
+		status  string
 	}
-	results := make(chan probeResult, total)
+	workerCount := runtime.NumCPU() * 4
+	if workerCount < 10 {
+		workerCount = 10
+	}
+	if workerCount > total {
+		workerCount = total
+	}
+	tasks := make(chan Snapshot)
+	results := make(chan probeResult, workerCount*2)
 	var wg sync.WaitGroup
 
-	for _, snap := range snapshots {
+	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
-		go func(snap Snapshot) {
+		go func() {
 			defer wg.Done()
-			if err := s.probeSem.Acquire(ctx, 1); err != nil {
-				results <- probeResult{tag: snap.Tag, name: snap.Name, err: "probe cancelled: " + err.Error()}
-				return
-			}
-			defer s.probeSem.Release(1)
+			for snap := range tasks {
+				if err := s.probeSem.Acquire(ctx, 1); err != nil {
+					results <- probeResult{tag: snap.Tag, name: snap.Name, latency: -1, status: "cancelled", err: "probe cancelled: " + err.Error()}
+					continue
+				}
 
-			probeCtx, probeCancel := context.WithTimeout(ctx, 10*time.Second)
-			defer probeCancel()
+				probeCtx, probeCancel := context.WithTimeout(ctx, 10*time.Second)
+				latency, err := s.mgr.Probe(probeCtx, snap.Tag)
+				probeCancel()
+				s.probeSem.Release(1)
 
-			latency, err := s.mgr.Probe(probeCtx, snap.Tag)
-			if err != nil {
-				results <- probeResult{tag: snap.Tag, name: snap.Name, latency: -1, err: err.Error()}
-				return
+				if err != nil {
+					status := "error"
+					if errors.Is(err, context.Canceled) {
+						status = "cancelled"
+					}
+					results <- probeResult{tag: snap.Tag, name: snap.Name, latency: -1, status: status, err: err.Error()}
+					continue
+				}
+				latencyMs := latency.Milliseconds()
+				if latencyMs == 0 && latency > 0 {
+					latencyMs = 1
+				}
+				results <- probeResult{tag: snap.Tag, name: snap.Name, latency: latencyMs, status: "success"}
 			}
-			latencyMs := latency.Milliseconds()
-			if latencyMs == 0 && latency > 0 {
-				latencyMs = 1
-			}
-			results <- probeResult{tag: snap.Tag, name: snap.Name, latency: latencyMs}
-		}(snap)
+		}()
 	}
-	go func() { wg.Wait(); close(results) }()
+	go func() {
+		defer close(tasks)
+		for _, snap := range snapshots {
+			select {
+			case <-ctx.Done():
+				return
+			case tasks <- snap:
+			}
+		}
+	}()
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
 
 	successCount := 0
 	failedCount := 0
+	cancelledCount := 0
 	count := 0
 	for result := range results {
 		count++
-		if result.err != "" {
-			failedCount++
-		} else {
+		switch result.status {
+		case "success":
 			successCount++
-		}
-		status := "success"
-		if result.err != "" {
-			status = "error"
+		case "cancelled":
+			cancelledCount++
+			failedCount++
+		default:
+			failedCount++
 		}
 		eventData, _ := json.Marshal(map[string]any{
 			"type":     "progress",
 			"tag":      result.tag,
 			"name":     result.name,
 			"latency":  result.latency,
-			"status":   status,
+			"status":   result.status,
 			"error":    result.err,
 			"current":  count,
 			"total":    total,
@@ -990,7 +1018,13 @@ func (s *Server) streamProbeSnapshots(w http.ResponseWriter, r *http.Request, sn
 		flusher.Flush()
 	}
 
-	completeData, _ := json.Marshal(map[string]any{"type": "complete", "total": total, "success": successCount, "failed": failedCount})
+	completeData, _ := json.Marshal(map[string]any{
+		"type":      "complete",
+		"total":     total,
+		"success":   successCount,
+		"failed":    failedCount,
+		"cancelled": cancelledCount,
+	})
 	fmt.Fprintf(w, "data: %s\n\n", completeData)
 	flusher.Flush()
 }

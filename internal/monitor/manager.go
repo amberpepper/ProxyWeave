@@ -171,16 +171,17 @@ type entry struct {
 
 // Manager aggregates all node states for the UI/API.
 type Manager struct {
-	cfg        Config
-	probeDst   M.Socksaddr
-	probeReady bool
-	mu         sync.RWMutex
-	nodes      map[string]*entry
-	ctx        context.Context
-	cancel     context.CancelFunc
-	logger     Logger
-	stateStore StateStore
-	persisted  map[string]PersistedState
+	cfg                Config
+	probeDst           M.Socksaddr
+	probeReady         bool
+	mu                 sync.RWMutex
+	nodes              map[string]*entry
+	ctx                context.Context
+	cancel             context.CancelFunc
+	logger             Logger
+	stateStore         StateStore
+	persisted          map[string]PersistedState
+	periodicProbeInRun atomic.Bool
 }
 
 // Logger interface for logging
@@ -337,7 +338,14 @@ func (m *Manager) StartPeriodicHealthCheck(interval, timeout time.Duration) {
 			case <-m.ctx.Done():
 				return
 			case <-ticker.C:
+				if !m.periodicProbeInRun.CompareAndSwap(false, true) {
+					if m.logger != nil {
+						m.logger.Warn("skip periodic health check: previous round still running")
+					}
+					continue
+				}
 				m.probeAllNodes(timeout)
+				m.periodicProbeInRun.Store(false)
 			}
 		}
 	}()
