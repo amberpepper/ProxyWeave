@@ -185,6 +185,8 @@ type Manager struct {
 	stateStore         StateStore
 	persisted          map[string]PersistedState
 	periodicProbeInRun atomic.Bool
+	periodicProbeStop  context.CancelFunc
+	periodicProbeTO    time.Duration
 }
 
 // Logger interface for logging
@@ -329,31 +331,50 @@ func (m *Manager) SetStateStore(store StateStore) error {
 // interval: how often to check (e.g., 30 * time.Second)
 // timeout: timeout for each probe (e.g., 10 * time.Second)
 func (m *Manager) StartPeriodicHealthCheck(interval, timeout time.Duration) {
-	if !m.probeReady {
-		if m.logger != nil {
-			m.logger.Warn("probe target not configured, periodic health check disabled")
+	m.mu.Lock()
+	if m.periodicProbeStop != nil {
+		m.periodicProbeStop()
+		m.periodicProbeStop = nil
+	}
+	logger := m.logger
+	probeReady := m.probeReady
+	if timeout <= 0 {
+		timeout = m.periodicProbeTO
+	}
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	m.periodicProbeTO = timeout
+	if !probeReady {
+		m.mu.Unlock()
+		if logger != nil {
+			logger.Warn("probe target not configured, periodic health check disabled")
 		}
 		return
 	}
 	if interval <= 0 {
-		if m.logger != nil {
-			m.logger.Info("periodic health check disabled")
+		m.mu.Unlock()
+		if logger != nil {
+			logger.Info("periodic health check disabled")
 		}
 		return
 	}
+	loopCtx, cancel := context.WithCancel(m.ctx)
+	m.periodicProbeStop = cancel
+	m.mu.Unlock()
 
-	go func() {
+	go func(ctx context.Context, interval, timeout time.Duration) {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		for {
 			select {
-			case <-m.ctx.Done():
+			case <-ctx.Done():
 				return
 			case <-ticker.C:
 				if !m.periodicProbeInRun.CompareAndSwap(false, true) {
-					if m.logger != nil {
-						m.logger.Warn("skip periodic health check: previous round still running")
+					if logger != nil {
+						logger.Warn("skip periodic health check: previous round still running")
 					}
 					continue
 				}
@@ -361,15 +382,36 @@ func (m *Manager) StartPeriodicHealthCheck(interval, timeout time.Duration) {
 				m.periodicProbeInRun.Store(false)
 			}
 		}
-	}()
+	}(loopCtx, interval, timeout)
 
-	if m.logger != nil {
-		m.logger.Info("periodic health check started, interval: ", interval)
+	if logger != nil {
+		logger.Info("periodic health check started, interval: ", interval)
 	}
+}
+
+func (m *Manager) UpdatePeriodicHealthCheckInterval(interval time.Duration) {
+	if m == nil {
+		return
+	}
+	m.StartPeriodicHealthCheck(interval, 0)
 }
 
 // ProbeAllNow triggers a one-time health check on all nodes (e.g. after reload).
 func (m *Manager) ProbeAllNow(timeout time.Duration) {
+	if !m.probeReady {
+		if m.logger != nil {
+			m.logger.Warn("probe target not configured, skipping health check")
+		}
+		return
+	}
+	if timeout <= 0 {
+		m.mu.RLock()
+		timeout = m.periodicProbeTO
+		m.mu.RUnlock()
+		if timeout <= 0 {
+			timeout = 10 * time.Second
+		}
+	}
 	m.probeAllNodes(timeout)
 }
 
@@ -450,6 +492,12 @@ func (m *Manager) probeAllNodes(timeout time.Duration) {
 
 // Stop stops the periodic health check.
 func (m *Manager) Stop() {
+	m.mu.Lock()
+	if m.periodicProbeStop != nil {
+		m.periodicProbeStop()
+		m.periodicProbeStop = nil
+	}
+	m.mu.Unlock()
 	if m.cancel != nil {
 		m.cancel()
 	}

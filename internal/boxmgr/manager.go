@@ -301,6 +301,12 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 	if m.monitorMgr != nil && config.ShouldRunStartupHealthCheck(startupHealthMode, startupMinAvailable) {
 		go m.monitorMgr.ProbeAllNow(periodicHealthTimeout)
 	}
+	// A reload rebuilds the monitor node set. When periodic health checking is
+	// already enabled, trigger one immediate round so the dashboard does not sit
+	// with freshly-registered nodes waiting for the next ticker tick.
+	if m.monitorMgr != nil && m.healthCheckStarted && m.healthCheckInterval > 0 {
+		go m.monitorMgr.ProbeAllNow(periodicHealthTimeout)
+	}
 	newCfg.SuppressStartupHealthCheck = false
 	m.applyConfigSettings(newCfg)
 
@@ -941,6 +947,21 @@ func (m *Manager) TriggerReload(ctx context.Context) error {
 		return errConfigUnavailable
 	}
 	return m.ReloadWithPortMap(cfgCopy, portMap)
+}
+
+func (m *Manager) UpdateHealthCheckInterval(interval time.Duration) {
+	m.mu.Lock()
+	m.healthCheckInterval = interval
+	monitorMgr := m.monitorMgr
+	started := m.healthCheckStarted
+	m.mu.Unlock()
+
+	if monitorMgr == nil {
+		return
+	}
+	if started || interval > 0 {
+		monitorMgr.UpdatePeriodicHealthCheckInterval(interval)
+	}
 }
 
 // ReloadWithPortMap gracefully switches to a new configuration, preserving port assignments.

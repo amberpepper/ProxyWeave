@@ -47,6 +47,7 @@ type NodeManager interface {
 	UpdateNode(ctx context.Context, name string, node config.NodeConfig) (config.NodeConfig, error)
 	DeleteNode(ctx context.Context, name string) error
 	TriggerReload(ctx context.Context) error
+	UpdateHealthCheckInterval(interval time.Duration)
 }
 
 // Sentinel errors for node operations.
@@ -799,6 +800,9 @@ func (s *Server) testProxyURI(rawURI string) (bool, int64, string) {
 	}
 	defer response.Body.Close()
 
+	if isNoContentProbeTarget(targetURL) && response.StatusCode != http.StatusNoContent {
+		return false, 0, fmt.Sprintf("探测目标应返回状态码 204，实际返回 %d", response.StatusCode)
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 400 {
 		return false, 0, fmt.Sprintf("探测目标返回状态码 %d", response.StatusCode)
 	}
@@ -808,6 +812,13 @@ func (s *Server) testProxyURI(rawURI string) (bool, int64, string) {
 		latencyMs = 1
 	}
 	return true, latencyMs, ""
+}
+
+func isNoContentProbeTarget(targetURL *url.URL) bool {
+	if targetURL == nil {
+		return false
+	}
+	return strings.HasSuffix(strings.TrimRight(targetURL.EscapedPath(), "/"), "/generate_204")
 }
 
 // handleQualityAll checks exit-IP/ASN quality for all nodes and returns results via SSE.
@@ -1800,6 +1811,9 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 					if d, err := time.ParseDuration(req.Management.HealthCheckInterval); err == nil && d > 0 {
 						s.cfgSrc.Management.HealthCheckInterval = d
 						s.cfg.HealthCheckInterval = d
+						if s.nodeMgr != nil {
+							s.nodeMgr.UpdateHealthCheckInterval(d)
+						}
 					}
 				}
 				keyValue := strings.TrimSpace(req.Management.APIKey)
