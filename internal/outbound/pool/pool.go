@@ -638,11 +638,24 @@ func httpProbe(conn net.Conn, host, path string, useTLS bool) (time.Duration, er
 	if err != nil {
 		return 0, fmt.Errorf("invalid status code in response line: %q", strings.TrimSpace(statusLine))
 	}
-	// Accept 2xx/3xx as healthy.
+	if isNoContentProbePath(path) && code != http.StatusNoContent {
+		return 0, fmt.Errorf("probe target expected status 204, got %d", code)
+	}
 	if code < 200 || code >= 400 {
 		return 0, fmt.Errorf("probe target returned status %d", code)
 	}
 	return ttfb, nil
+}
+
+func isNoContentProbePath(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		path = "/generate_204"
+	}
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		path = path[:i]
+	}
+	return strings.HasSuffix(strings.TrimRight(path, "/"), "/generate_204")
 }
 
 type ipAPIResponse struct {
