@@ -301,11 +301,12 @@ func (m *Manager) Reload(newCfg *config.Config) error {
 	if m.monitorMgr != nil && config.ShouldRunStartupHealthCheck(startupHealthMode, startupMinAvailable) {
 		go m.monitorMgr.ProbeAllNow(periodicHealthTimeout)
 	}
-	// A reload rebuilds the monitor node set. When periodic health checking is
-	// already enabled, trigger one immediate round so the dashboard does not sit
-	// with freshly-registered nodes waiting for the next ticker tick.
+	// A reload rebuilds the monitor node set. Preserve inherited runtime state
+	// for unchanged nodes and only eagerly probe nodes that are new/changed.
 	if m.monitorMgr != nil && m.healthCheckStarted && m.healthCheckInterval > 0 {
-		go m.monitorMgr.ProbeAllNow(periodicHealthTimeout)
+		if pendingKeys := m.monitorMgr.ReloadPendingStateKeys(); len(pendingKeys) > 0 {
+			go m.monitorMgr.ProbeStateKeysNow(pendingKeys, periodicHealthTimeout)
+		}
 	}
 	newCfg.SuppressStartupHealthCheck = false
 	m.applyConfigSettings(newCfg)

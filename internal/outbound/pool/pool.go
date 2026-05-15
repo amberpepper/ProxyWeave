@@ -62,6 +62,7 @@ type Options struct {
 type MemberMeta struct {
 	Name          string
 	URI           string
+	StateKey      string
 	Mode          string
 	ListenAddress string
 	Port          uint16
@@ -136,6 +137,7 @@ func newPool(ctx context.Context, _ adapter.Router, logger singlog.ContextLogger
 				Tag:           memberTag,
 				Name:          meta.Name,
 				URI:           meta.URI,
+				StateKey:      meta.StateKey,
 				Mode:          meta.Mode,
 				ListenAddress: meta.ListenAddress,
 				Port:          meta.Port,
@@ -244,6 +246,7 @@ func (p *poolOutbound) initializeMembersLocked() error {
 				Tag:           tag,
 				Name:          meta.Name,
 				URI:           meta.URI,
+				StateKey:      meta.StateKey,
 				Mode:          meta.Mode,
 				ListenAddress: meta.ListenAddress,
 				Port:          meta.Port,

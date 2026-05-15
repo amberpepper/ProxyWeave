@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"proxyweave/internal/config"
+
 	M "github.com/sagernet/sing/common/metadata"
 )
 
@@ -40,6 +42,7 @@ type NodeInfo struct {
 	Tag           string `json:"tag"`
 	Name          string `json:"name"`
 	URI           string `json:"uri"`
+	StateKey      string `json:"state_key,omitempty"`
 	Mode          string `json:"mode"`
 	ListenAddress string `json:"listen_address,omitempty"`
 	Port          uint16 `json:"port,omitempty"`
@@ -72,6 +75,7 @@ type QualityInfo struct {
 
 // PersistedState is the DB-backed subset of runtime state that survives restarts.
 type PersistedState struct {
+	StateKey         string
 	Available        bool
 	InitialCheckDone bool
 	FailureCount     int
@@ -148,6 +152,7 @@ type EntryHandle struct {
 
 type entry struct {
 	info             NodeInfo
+	stateKey         string
 	failure          int
 	success          int64
 	timeline         []TimelineEvent
@@ -187,6 +192,7 @@ type Manager struct {
 	periodicProbeInRun atomic.Bool
 	periodicProbeStop  context.CancelFunc
 	periodicProbeTO    time.Duration
+	lastReloadNewKeys  map[string]struct{}
 }
 
 // Logger interface for logging
@@ -415,11 +421,67 @@ func (m *Manager) ProbeAllNow(timeout time.Duration) {
 	m.probeAllNodes(timeout)
 }
 
+// ProbeStateKeysNow triggers a one-time health check for a selected set of state keys.
+func (m *Manager) ProbeStateKeysNow(stateKeys []string, timeout time.Duration) {
+	if !m.probeReady {
+		if m.logger != nil {
+			m.logger.Warn("probe target not configured, skipping health check")
+		}
+		return
+	}
+	if timeout <= 0 {
+		m.mu.RLock()
+		timeout = m.periodicProbeTO
+		m.mu.RUnlock()
+		if timeout <= 0 {
+			timeout = 10 * time.Second
+		}
+	}
+	keySet := make(map[string]struct{}, len(stateKeys))
+	for _, key := range stateKeys {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		keySet[key] = struct{}{}
+	}
+	if len(keySet) == 0 {
+		return
+	}
+	m.probeNodes(timeout, func(e *entry) bool {
+		e.mu.RLock()
+		stateKey := e.stateKey
+		e.mu.RUnlock()
+		_, ok := keySet[stateKey]
+		return ok
+	})
+}
+
 // probeAllNodes checks all registered nodes concurrently.
 func (m *Manager) probeAllNodes(timeout time.Duration) {
+	m.probeNodes(timeout, nil)
+}
+
+// Stop stops the periodic health check.
+func (m *Manager) Stop() {
+	m.mu.Lock()
+	if m.periodicProbeStop != nil {
+		m.periodicProbeStop()
+		m.periodicProbeStop = nil
+	}
+	m.mu.Unlock()
+	if m.cancel != nil {
+		m.cancel()
+	}
+}
+
+func (m *Manager) probeNodes(timeout time.Duration, filter func(*entry) bool) {
 	m.mu.RLock()
 	entries := make([]*entry, 0, len(m.nodes))
 	for _, e := range m.nodes {
+		if filter != nil && !filter(e) {
+			continue
+		}
 		entries = append(entries, e)
 	}
 	m.mu.RUnlock()
@@ -490,19 +552,6 @@ func (m *Manager) probeAllNodes(timeout time.Duration) {
 	}
 }
 
-// Stop stops the periodic health check.
-func (m *Manager) Stop() {
-	m.mu.Lock()
-	if m.periodicProbeStop != nil {
-		m.periodicProbeStop()
-		m.periodicProbeStop = nil
-	}
-	m.mu.Unlock()
-	if m.cancel != nil {
-		m.cancel()
-	}
-}
-
 func parsePort(value string) uint16 {
 	p, err := strconv.Atoi(value)
 	if err != nil || p <= 0 || p > 65535 {
@@ -519,19 +568,27 @@ func (m *Manager) Register(info NodeInfo) *EntryHandle {
 	if !ok {
 		e = &entry{
 			info:     info,
+			stateKey: stateKeyForNodeInfo(info),
 			timeline: make([]TimelineEvent, 0, maxTimelineSize),
 		}
 		m.nodes[info.Tag] = e
 	} else {
-		if e.info.URI != "" && info.URI != "" && e.info.URI != info.URI {
+		newStateKey := stateKeyForNodeInfo(info)
+		if e.stateKey != "" && newStateKey != "" && e.stateKey != newStateKey {
 			e.resetRuntimeLocked()
 		}
 		e.info = info
+		e.stateKey = newStateKey
 	}
-	if uri := strings.TrimSpace(info.URI); uri != "" {
-		if st, found := m.persisted[uri]; found {
+	if key := e.stateKey; key != "" {
+		if st, found := m.persisted[key]; found {
 			e.restorePersistedState(st)
-			delete(m.persisted, uri)
+			delete(m.persisted, key)
+			if m.lastReloadNewKeys != nil {
+				delete(m.lastReloadNewKeys, key)
+			}
+		} else if m.lastReloadNewKeys != nil {
+			m.lastReloadNewKeys[key] = struct{}{}
 		}
 	}
 	return &EntryHandle{ref: e, mgr: m}
@@ -542,6 +599,17 @@ func (m *Manager) Register(info NodeInfo) *EntryHandle {
 func (m *Manager) ClearNodes() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	for _, e := range m.nodes {
+		stateKey := strings.TrimSpace(e.stateKey)
+		if stateKey == "" {
+			stateKey = stateKeyForNodeInfo(e.info)
+		}
+		if stateKey == "" {
+			continue
+		}
+		m.persisted[stateKey] = e.persistedState()
+	}
+	m.lastReloadNewKeys = make(map[string]struct{})
 	m.nodes = make(map[string]*entry)
 }
 
@@ -615,6 +683,21 @@ func (m *Manager) SnapshotFiltered(onlyAvailable bool) []Snapshot {
 		return latencyI < latencyJ
 	})
 	return snapshots
+}
+
+func (m *Manager) ReloadPendingStateKeys() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.lastReloadNewKeys) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m.lastReloadNewKeys))
+	for key := range m.lastReloadNewKeys {
+		keys = append(keys, key)
+	}
+	m.lastReloadNewKeys = nil
+	sort.Strings(keys)
+	return keys
 }
 
 // Probe triggers a manual health check.
@@ -768,6 +851,9 @@ func (e *entry) resetRuntimeLocked() {
 func (e *entry) restorePersistedState(st PersistedState) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if strings.TrimSpace(st.StateKey) != "" {
+		e.stateKey = strings.TrimSpace(st.StateKey)
+	}
 	e.failure = st.FailureCount
 	e.blacklist = st.Blacklisted
 	e.until = st.BlacklistedUntil
@@ -816,6 +902,7 @@ func (e *entry) persistedState() PersistedState {
 	}
 
 	return PersistedState{
+		StateKey:         strings.TrimSpace(e.stateKey),
 		Available:        e.available,
 		InitialCheckDone: e.initialCheckDone,
 		FailureCount:     e.failure,
@@ -856,9 +943,20 @@ func (m *Manager) persistEntry(e *entry) {
 	if store == nil {
 		return
 	}
+	e.mu.RLock()
 	uri := strings.TrimSpace(e.info.URI)
+	stateKey := strings.TrimSpace(e.stateKey)
+	e.mu.RUnlock()
 	if uri == "" {
 		return
+	}
+	if stateKey == "" {
+		stateKey = config.NodeStateKey(uri)
+		e.mu.Lock()
+		if e.stateKey == "" {
+			e.stateKey = stateKey
+		}
+		e.mu.Unlock()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -1159,4 +1257,11 @@ func (h *EntryHandle) MarkAvailable(available bool) {
 	if h.mgr != nil {
 		h.mgr.persistEntry(h.ref)
 	}
+}
+
+func stateKeyForNodeInfo(info NodeInfo) string {
+	if key := strings.TrimSpace(info.StateKey); key != "" {
+		return key
+	}
+	return config.NodeStateKey(info.URI)
 }

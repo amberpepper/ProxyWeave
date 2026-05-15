@@ -84,9 +84,10 @@ func Build(cfg *config.Config) (option.Options, error) {
 		memberTags = append(memberTags, tag)
 		baseOutbounds = append(baseOutbounds, outbound)
 		meta := poolout.MemberMeta{
-			Name: node.Name,
-			URI:  node.URI,
-			Mode: cfg.Mode,
+			Name:     node.Name,
+			URI:      node.URI,
+			StateKey: node.StateKey(),
+			Mode:     cfg.Mode,
 		}
 		// For multi-port and hybrid modes, use per-node port
 		if cfg.Mode == "multi-port" || cfg.Mode == "hybrid" {

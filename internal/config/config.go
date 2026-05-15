@@ -1,7 +1,9 @@
 package config
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -133,6 +136,14 @@ type NodeConfig struct {
 // This is used to preserve port assignments across reloads.
 func (n *NodeConfig) NodeKey() string {
 	return n.URI
+}
+
+// StateKey returns a stable identity for runtime-state inheritance.
+// Unlike NodeKey, it ignores display-only differences such as fragments
+// and normalizes supported URI formats so subscription refreshes can
+// preserve health state across harmless formatting changes.
+func (n *NodeConfig) StateKey() string {
+	return NodeStateKey(n.URI)
 }
 
 // DefaultWebConfig returns a minimal web-managed configuration. It contains no
@@ -300,6 +311,196 @@ func ExtractNodeName(uri string) string {
 	}
 
 	return ""
+}
+
+// NodeStateKey returns a stable hash for runtime-state continuity.
+func NodeStateKey(uri string) string {
+	canonical := canonicalNodeStateIdentity(uri)
+	if canonical == "" {
+		canonical = strings.TrimSpace(uri)
+	}
+	if canonical == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(canonical))
+	return hex.EncodeToString(sum[:])
+}
+
+func canonicalNodeStateIdentity(rawURI string) string {
+	rawURI = strings.TrimSpace(rawURI)
+	if rawURI == "" {
+		return ""
+	}
+	lower := strings.ToLower(rawURI)
+	if strings.HasPrefix(lower, "vmess://") {
+		if canonical, ok := canonicalVMessStateIdentity(rawURI); ok {
+			return canonical
+		}
+	}
+	return canonicalStandardStateIdentity(rawURI)
+}
+
+func canonicalStandardStateIdentity(rawURI string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURI))
+	if err != nil {
+		return strings.TrimSpace(rawURI)
+	}
+	scheme := canonicalStateScheme(u.Scheme)
+	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	port := strings.TrimSpace(u.Port())
+	path := strings.TrimSpace(u.EscapedPath())
+	user := ""
+	pass := ""
+	if u.User != nil {
+		user = u.User.Username()
+		pass, _ = u.User.Password()
+	}
+	return strings.Join([]string{
+		scheme,
+		user,
+		pass,
+		host,
+		port,
+		path,
+		canonicalQueryValues(u.Query()),
+	}, "|")
+}
+
+func canonicalVMessStateIdentity(rawURI string) (string, bool) {
+	encoded := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(rawURI), "vmess://"))
+	if decoded, ok := decodeVMessPayload(encoded); ok {
+		type vmessState struct {
+			Add  string      `json:"add"`
+			Port interface{} `json:"port"`
+			ID   string      `json:"id"`
+			Aid  interface{} `json:"aid"`
+			Scy  string      `json:"scy"`
+			Net  string      `json:"net"`
+			Type string      `json:"type"`
+			Host string      `json:"host"`
+			Path string      `json:"path"`
+			TLS  string      `json:"tls"`
+			SNI  string      `json:"sni"`
+			ALPN string      `json:"alpn"`
+			FP   string      `json:"fp"`
+		}
+		var payload vmessState
+		if err := json.Unmarshal(decoded, &payload); err == nil && strings.TrimSpace(payload.Add) != "" && strings.TrimSpace(payload.ID) != "" {
+			return strings.Join([]string{
+				"vmess",
+				strings.TrimSpace(payload.ID),
+				strings.ToLower(strings.TrimSpace(payload.Add)),
+				strconv.Itoa(flexToInt(payload.Port, 443)),
+				strconv.Itoa(flexToInt(payload.Aid, 0)),
+				strings.TrimSpace(payload.Scy),
+				strings.TrimSpace(payload.Net),
+				strings.TrimSpace(payload.Type),
+				strings.TrimSpace(payload.Host),
+				strings.TrimSpace(payload.Path),
+				strings.TrimSpace(payload.TLS),
+				strings.TrimSpace(payload.SNI),
+				strings.TrimSpace(payload.ALPN),
+				strings.TrimSpace(payload.FP),
+			}, "|"), true
+		}
+	}
+
+	u, err := url.Parse(strings.TrimSpace(rawURI))
+	if err != nil {
+		return "", false
+	}
+	server := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	if server == "" {
+		return "", false
+	}
+	port := strings.TrimSpace(u.Port())
+	if port == "" {
+		port = "443"
+	}
+	uuid := ""
+	if u.User != nil {
+		uuid = strings.TrimSpace(u.User.Username())
+	}
+	if uuid == "" {
+		return "", false
+	}
+	q := u.Query()
+	return strings.Join([]string{
+		"vmess",
+		uuid,
+		server,
+		port,
+		strings.TrimSpace(q.Get("alterId")),
+		strings.TrimSpace(q.Get("encryption")),
+		strings.TrimSpace(q.Get("type")),
+		strings.TrimSpace(q.Get("headerType")),
+		strings.TrimSpace(q.Get("host")),
+		strings.TrimSpace(q.Get("path")),
+		strings.TrimSpace(q.Get("security")),
+		strings.TrimSpace(q.Get("sni")),
+		strings.TrimSpace(q.Get("alpn")),
+		strings.TrimSpace(q.Get("fp")),
+	}, "|"), true
+}
+
+func decodeVMessPayload(encoded string) ([]byte, bool) {
+	encoded = strings.TrimSpace(encoded)
+	if idx := strings.Index(encoded, "#"); idx != -1 {
+		encoded = encoded[:idx]
+	}
+	var decoded []byte
+	var err error
+	decoded, err = base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		decoded, err = base64.RawStdEncoding.DecodeString(encoded)
+	}
+	if err != nil {
+		decoded, err = base64.RawURLEncoding.DecodeString(encoded)
+	}
+	return decoded, err == nil
+}
+
+func flexToInt(v interface{}, fallback int) int {
+	switch value := v.(type) {
+	case float64:
+		return int(value)
+	case int:
+		return value
+	case string:
+		if parsed, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func canonicalStateScheme(scheme string) string {
+	switch strings.ToLower(strings.TrimSpace(scheme)) {
+	case "hy2":
+		return "hysteria2"
+	case "socks":
+		return "socks5"
+	default:
+		return strings.ToLower(strings.TrimSpace(scheme))
+	}
+}
+
+func canonicalQueryValues(values url.Values) string {
+	if len(values) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		vals := append([]string(nil), values[key]...)
+		sort.Strings(vals)
+		parts = append(parts, strings.ToLower(strings.TrimSpace(key))+"="+strings.Join(vals, ","))
+	}
+	return strings.Join(parts, "&")
 }
 
 func (c *Config) normalize() error {

@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS subscription_nodes (
 
 CREATE TABLE IF NOT EXISTS runtime_state (
   node_uri TEXT PRIMARY KEY,
+  state_key TEXT NOT NULL DEFAULT '',
   available INTEGER NOT NULL DEFAULT 0,
   initial_check_done INTEGER NOT NULL DEFAULT 0,
   failure_count INTEGER NOT NULL DEFAULT 0,
@@ -154,6 +155,10 @@ func Open(path string) (*Store, error) {
 	if _, err := db.ExecContext(ctx, schemaSQL); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE runtime_state ADD COLUMN state_key TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		_ = db.Close()
+		return nil, fmt.Errorf("ensure runtime_state.state_key: %w", err)
 	}
 
 	s := &Store{db: db, path: path}
@@ -741,20 +746,21 @@ func (s *Store) MarkSubscriptionRefreshError(ctx context.Context, id int64, msg 
 }
 
 func (s *Store) LoadRuntimeStates(ctx context.Context) (map[string]monitor.PersistedState, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT node_uri, available, initial_check_done, failure_count, blacklisted, blacklisted_until, last_error, last_latency_ms, last_success, last_failure, country_code, country, exit_ip, proxy_type, quality_source, quality_error, quality_checked_at, ip_valid, ip_version, ip_type, ip_invalid_reason, asn, as_name, isp, org, mobile, hosting, proxy, updated_at FROM runtime_state`)
+	rows, err := s.db.QueryContext(ctx, `SELECT node_uri, state_key, available, initial_check_done, failure_count, blacklisted, blacklisted_until, last_error, last_latency_ms, last_success, last_failure, country_code, country, exit_ip, proxy_type, quality_source, quality_error, quality_checked_at, ip_valid, ip_version, ip_type, ip_invalid_reason, asn, as_name, isp, org, mobile, hosting, proxy, updated_at FROM runtime_state`)
 	if err != nil {
 		return nil, fmt.Errorf("load runtime states: %w", err)
 	}
 	defer rows.Close()
 	out := make(map[string]monitor.PersistedState)
 	for rows.Next() {
-		var uri string
+		var uri, stateKey string
 		var st monitor.PersistedState
 		var available, initialDone, blacklisted, ipValid, mobile, hosting, proxyFlag int
 		var blacklistedUntil, lastSuccess, lastFailure, lastError, checkedAt sql.NullString
-		if err := rows.Scan(&uri, &available, &initialDone, &st.FailureCount, &blacklisted, &blacklistedUntil, &lastError, &st.LastLatencyMs, &lastSuccess, &lastFailure, &st.CountryCode, &st.Country, &st.ExitIP, &st.ProxyType, &st.QualitySource, &st.QualityError, &checkedAt, &ipValid, &st.IPVersion, &st.IPType, &st.IPInvalidReason, &st.ASN, &st.ASName, &st.ISP, &st.Org, &mobile, &hosting, &proxyFlag, new(string)); err != nil {
+		if err := rows.Scan(&uri, &stateKey, &available, &initialDone, &st.FailureCount, &blacklisted, &blacklistedUntil, &lastError, &st.LastLatencyMs, &lastSuccess, &lastFailure, &st.CountryCode, &st.Country, &st.ExitIP, &st.ProxyType, &st.QualitySource, &st.QualityError, &checkedAt, &ipValid, &st.IPVersion, &st.IPType, &st.IPInvalidReason, &st.ASN, &st.ASName, &st.ISP, &st.Org, &mobile, &hosting, &proxyFlag, new(string)); err != nil {
 			return nil, fmt.Errorf("scan runtime state: %w", err)
 		}
+		st.StateKey = strings.TrimSpace(stateKey)
 		st.Available = available == 1
 		st.InitialCheckDone = initialDone == 1
 		st.Blacklisted = blacklisted == 1
@@ -777,7 +783,12 @@ func (s *Store) LoadRuntimeStates(ctx context.Context) (map[string]monitor.Persi
 		if checkedAt.Valid {
 			st.QualityCheckedAt, _ = time.Parse(time.RFC3339Nano, checkedAt.String)
 		}
-		out[uri] = st
+		key := st.StateKey
+		if key == "" {
+			key = config.NodeStateKey(uri)
+			st.StateKey = key
+		}
+		out[key] = st
 	}
 	return out, rows.Err()
 }
@@ -796,12 +807,13 @@ func (s *Store) SaveRuntimeState(ctx context.Context, nodeURI string, st monitor
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `INSERT INTO runtime_state (
-		node_uri, available, initial_check_done, failure_count, blacklisted, blacklisted_until,
+		node_uri, state_key, available, initial_check_done, failure_count, blacklisted, blacklisted_until,
 		last_error, last_latency_ms, last_success, last_failure,
 		country_code, country, exit_ip, proxy_type, quality_source, quality_error, quality_checked_at,
 		ip_valid, ip_version, ip_type, ip_invalid_reason, asn, as_name, isp, org, mobile, hosting, proxy, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(node_uri) DO UPDATE SET
+		state_key=excluded.state_key,
 		available=excluded.available,
 		initial_check_done=excluded.initial_check_done,
 		failure_count=excluded.failure_count,
@@ -831,6 +843,7 @@ func (s *Store) SaveRuntimeState(ctx context.Context, nodeURI string, st monitor
 		proxy=excluded.proxy,
 		updated_at=excluded.updated_at`,
 		nodeURI,
+		strings.TrimSpace(st.StateKey),
 		boolToInt(st.Available),
 		boolToInt(st.InitialCheckDone),
 		st.FailureCount,
